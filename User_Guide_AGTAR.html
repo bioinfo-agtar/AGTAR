@@ -1,0 +1,90 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>AGTAR</title>
+<style type="text/css">
+body {
+	background-color: #E4FAE6;
+}
+body,td,th {
+	font-family: "Times New Roman", Times, serif;
+	color: #000000;
+}
+</style>
+</head>
+
+
+  <tr>
+    <td width="1305" height="93" align="left" bordercolor="#006699" bgcolor="#006699" ><h1><strong>AGTAR (Adapted Genetic Algorithm)</strong></h1></td>
+</tr>
+</table>
+<h2><a href="#name1"><strong>Introduction</strong></a></h2>
+<h2><strong><a href="#name2">Download</a></strong></h2>
+<h2><strong><a href="#name3">Document</a></strong></h2>
+<hr align="center" size=2 noshade="noshade" color="#000000" />
+<p><strong><a name="name1"><font size=5>1.Introduction</font></a></strong><a name="name1"></a></p>
+<font size=4>AGTAR is a program that uses adapted genetic algorithm to assemble and quantify transcripts based on RNA-seq data.This method is suitable for Linux systems, and requires python&gt;=2.7 and GLIBC&gt;=2.14(we tested AGTAR based on the Redhat6.8 system environment, python2.7.13 and GLIBC_2.17).</font>  
+<p><strong><a name="name2"><font size=5>2.Download</font></a></strong><a name="name2"></a></p>
+<font size=4>The latest version of AGTAR can be downloaded <a href="https://github.com/bioinfo-agtar/agtar/archive/master.zip">here</a>.</font>
+<p><strong><a name="name3"><font size=5>3.Document</font></a></strong><a name="name3"></a></p>
+<p><font size=5><strong>3.1 Installation</strong></font></p>
+<p><font size=4><strong>3.1.1 Unzip the downloaded installation package</strong></font></p>
+<p><font size=4 color="#0000ff">unzip</font><font size=4 color="#0000ff"> agtar-master.zip</font></p>
+<p><font size=4><strong>3.1.2 Add the location of  bin directory to the system path</strong></font></p>
+<p><font size=4>If the AGTAR folder is located at /opt/biosoft/agtar-master, then execute the following command:</font></p>
+<p><font size=4 color="#0000ff">echo  'PATH=$PATH:/opt/biosoft/agtar-master/bin/' &gt;&gt; ~/.bashrc<br />
+source ~/.bashrc</font><br />
+</p>
+<p><strong><font size=5>3.2 Usage</font></strong></p>
+<h3>3.2.1 Requirement</h3>
+<p><font size=4>If the result file mapping reads to genome is in bam format, you need to install <a href="http://samtools.sourceforge.net/#samtools">SAMtools</a> to convert bam files to sam files.</font></p>
+<p><font size=4><strong>3.2.2 Example</strong></font></p>
+<p><font size=4><strong>Start with bam file(input.bam):</strong></font></p>
+<p><font size=4>#Convert bam files to sam files:</font><br />
+<font size=4 color="#0000ff">samtools view -h -o  output.sam   input.bam</font></p>
+<p><font size=4>#Use processesam module to generate .junc.bed file and .instance file:</font><br />
+  <font size=4 color="#0000ff">processsam   -a  output.sam</font></p>
+<p><font size=4>#Assembling and quantifying transcripts with AGTAR:</font><br />
+  <font size=4 color="#0000ff">AGTAR  -o AGTAR -p 8 -G  genes.gtf -c output.sam.junc.bed -t  output.instance input.bam</font>
+<p><font size=4><strong>Start with sam file(input.sam):</strong></font></p>
+<p><font size=4>#Use processesam module to generate' .junc.bed' file and '.instance' file:</font><br />
+  <font size=4 color="#0000ff">processsam   -a  input.sam</font></p>
+<p><font size=4>#Assembling and quantifying transcripts with AGTAR:</font><br />
+<font size=4 color="#0000ff">AGTAR  -o AGTAR -p 8 -G  genes.gtf -c input.sam.junc.bed -t  input.sam.instance input.sam</font></p>
+<p><font size=4><strong>3.2.3 Arguments</strong></font></p>
+<p><font size=4><strong>processsam arguments:</strong></font></p>
+<p><font size=4>-a/--annotation&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Output annoation files, including read coverage (.real.wig), read coverage considering<br />
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp; junctions and paired-end read spans (.wig), instance range and boundary (.bound.bed),<br />
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; junctions (.bed) and  junction summary (.junction.bed).</font></p>
+<p><font size=4>#Please refer to <a href="http://alumni.cs.ucr.edu/~liw/cem.html#cem"> http://alumni.cs.ucr.edu/~liw/cem.html</a> for more details on the use of processesam.</font></p>
+<p>&nbsp;</p>
+<p><font size=4><strong>AGTAR arguments:</strong></font></p>
+<p><font size=4>Usage: AGTAR [options] &lt;input.bam/.sam&gt;<br />
+Version: AGTAR V1.0</font></p>
+<p><font size=4>Options:<br />
+--version &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; show program's version number and exit<br />
+  -h, --help &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; show this help message and exit<br />
+-o OUTPUT_DIR, --output_dir=OUTPUT_DIR&nbsp;<br />
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+Set the storage path of the output file. (default:./)<br />
+  -G GTF, --GTF=GTF &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Use the reference transcript annotation file to guide transcript assembly(GTF format).<br />
+  -p NUM_THREADS, --num-threads=NUM_THREADS<br />
+ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; Specify the number of processes to use for transcript assembly. (default:1)<br />
+  -c JUNCTION, --junction=JUNCTION<br />
+ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; The junction file output by the processsam module(must be given).<br />
+  -t INSTANCE, --instance=INSTANCE<br />
+ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; The instance file output by the processsam module(must be given).<br />
+-n POPULATION_CAPACITY,--population-capacity= POPULATION_CAPACITY&nbsp;<br />
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; Set population capacity of genetic algorithm.(default:100)<br />
+-m MAXIMUM_EVOLUTIONARY_GENERATION,--maximum-evolutionary-generation=MAXIMUM_EVOLUTIONARY_GENERATION<br />
+&nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Set the maximum evolutionary generation number of genetic algorithm.(default:100)</font></p>
+<p><font size=4>#The following are the parameters of QuaPra（enabled when a genome annotation file is given）:<br />
+  -j JUNC, --junc=JUNC &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Set the minimum junction coverage. (default:1)<br />
+  -a ANCHOR, --min-anchor=ANCHOR<br />
+ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Set the minimum anchor length on each side of the junction. (default:8)<br />
+  -I MAX_INTRON_LENGTH, --max-intron-length=MAX_INTRON_LENGTH<br />
+ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Set the maximum length of the unannotated introns.(default:200000)<br />
+  -i MIN_INTRON_LENGTH, --min-intron-length=MIN_INTRON_LENGTH<br />
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Set the minimum length of the unannotated introns.(default:5)</font></p></body>
+</html>

@@ -1,0 +1,5096 @@
+#!/usr/bin/env python
+# 0.0 coding:utf-8 0.0
+import os,time,sys,re,copy,readline,bisect
+import pysam
+import time 
+import shutil,math,gc
+from optparse import OptionParser
+import multiprocessing
+import random
+
+since=time.time()
+def best(pop, fit_value):
+    px = len(pop)
+    best_individual = []
+    best_fit = fit_value[0]
+    for i in range(1, px):
+        if(fit_value[i] > best_fit):
+            best_fit = fit_value[i]
+            best_individual = pop[i]
+    return [best_individual, best_fit]
+
+def calnewobjValue(pop,obj_value,junction,J,chrom_length):
+    m=0 
+    p_value=[]                   
+    for k in range(len(junction)):
+         p_value.append(0)
+         for p in range(chrom_length):      
+             p_value[k]+=pop[p]*J[p][k]
+         if p_value[k]>junction[k]:                #判断产生的随机字符串是否满足约束条件                   
+                  m=m+1
+    if m==len(junction):
+         obj_value= obj_value
+    else:
+         obj_value=0
+
+    return obj_value
+
+
+def calfitValue(obj_value,pop,junction,J,chrom_length):
+   
+    for i in range(len(pop)):
+        obj_value[i]=calnewobjValue(pop[i], obj_value[i], junction,J,chrom_length)
+        if obj_value[i]==0:
+            obj_value[i]=0
+        else:
+            obj_value[i]=1/obj_value[i]
+    return obj_value
+
+def calobjValue(pop, chrom_length,exon,Y):
+    obj_value = []
+    summ=[[]]
+    h=0
+    for i in range(len(pop)):
+        num=[]
+        for j in range(len(exon)):
+            num.append(0)
+            for k in range(chrom_length):    
+                num[j]+=pop[i][k]*Y[k][j]
+        summ.append(num)                                   #计算k1-kp的值      
+    summ=summ[1:]     
+    for i in range(len(summ)):
+        f=0
+        for j in range(len(exon)):
+            f+=(exon[j]-summ[i][j])*(exon[j]-summ[i][j])
+        obj_value.append(f)
+        if f==0:
+             h=i
+             break                                         #计算目标函数值1
+
+    return [obj_value,h]
+
+def sum1(fit_value):
+	total1 = 0
+	for i in range(len(fit_value)):
+		total1 += fit_value[i]
+	return total1
+
+
+def sum2(fit_value,f_avg):
+	total2 = 0
+	for i in range(len(fit_value)):
+		total2 += (fit_value[i]-f_avg)*(fit_value[i]-f_avg)
+	return total2
+
+
+def crossover(pop,fit_value,pc,pm,h,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R):
+    pop_len = len(pop)
+    fit_len = len(fit_value)
+    total1=sum1(fit_value)
+    f_avg=total1/fit_len
+    f_avg_list.append(f_avg)
+    total2=sum2(fit_value,f_avg)
+    sigma=math.sqrt(total2/fit_len)
+    sigma_list.append(sigma)
+    if(h==0):
+           pc_list.append(pc)
+           pm_list.append(pm)
+    else:
+           deta_f_avg=f_avg_list[h]-f_avg_list[h-1]
+           deta_sigma=sigma_list[h]-sigma_list[h-1]
+           deta_pc=0.1*deta_f_avg*(1/max(f_avg_list[h-1],f_avg_list[h]))
+           deta_pm=0.01*deta_sigma*(1/max(sigma_list[h-1],sigma_list[h]))
+           if f_avg_list[h]>f_avg_list[h-1]:
+               pc=pc+abs(deta_pc)
+               pm=pm+abs(deta_pm)
+           else:
+               pc=pc-abs(deta_pc)
+               pm=pm-abs(deta_pm)
+
+           if sigma_list[h]>sigma_list[h-1]:
+               pc=pc+abs(deta_pc)
+               pm=pm-abs(deta_pm)    
+           else:
+               pc=pc-abs(deta_pc)
+               pm=pm+abs(deta_pm)
+
+           if abs(deta_f_avg)<1 and abs(deta_sigma)<1:
+               pc=pc+abs(deta_pc)
+               pm=pm+abs(deta_pm)    
+           
+    pc_list.append(pc)
+    pm_list.append(pm)
+    
+
+#交叉
+    pop_len = len(pop)
+    for i in range(pop_len - 1):
+        if(random.random() < pc):
+            cpoint = random.randint(0,len(pop[0]))
+            temp1 = []
+            temp2 = []
+            temp1.extend(pop[i][0:cpoint])
+            temp1.extend(pop[i+1][cpoint:len(pop[i])])
+            temp2.extend(pop[i+1][0:cpoint])
+            temp2.extend(pop[i][cpoint:len(pop[i])])
+            pop[i] = temp1
+            pop[i+1] = temp2
+#变异
+    px = len(pop)
+    py = len(pop[0])   
+    for i in range(px):
+        if(random.random() < pm):
+            mpoint = random.randint(0, py-1)
+            pop[i][mpoint]=random.uniform(0,R[mpoint]+0.1)
+
+def variableRange(chrom_length,exon,Y):
+    R=[] 
+    for i in range(chrom_length):
+        r=[]
+        t=0
+        for j in range(len(exon)):
+            if Y[i][j]==1:
+                r.append(exon[j])
+        
+        t=min(r)
+        R.append(t)
+    return R
+
+def geneEncoding(pop_size, chrom_length,junction,J,exon,Y):   
+    Range=variableRange(chrom_length,exon,Y)    #确定范围
+    pop = [[]]
+    p_value=[]
+    for i in range(pop_size):
+        m=0
+        while(m!=len(junction)):
+            m=0 
+            temp = []
+            for j in range(chrom_length):
+               temp.append(random.uniform(0, Range[j]+0.1))             #产生每个变量所属范围内的随机数                        
+            for k in range(len(junction)):
+                p_value.append(0)
+                for p in range(chrom_length):    
+                    p_value[k]+=temp[p]*J[p][k]
+                if p_value[k]>junction[k]:                              #判断产生的随机字符串是否满足约束条件                   
+                    m=m+1
+        pop.append(temp)
+
+    return pop[1:],Range
+
+
+def sum(fit_value):
+	total = 0
+	for i in range(len(fit_value)):
+		total += fit_value[i]
+	return total
+
+
+def cumsum(fit_value):
+	for i in range(len(fit_value)-2, -1, -1):
+		t = 0
+		j = 0
+		while(j <= i):
+			t += fit_value[j]
+			j += 1
+		fit_value[i] = t
+		fit_value[len(fit_value)-1] = 1
+
+
+def selection(pop, fit_value):
+	newfit_value = []
+	# 适应度总和
+	total_fit = sum(fit_value)
+	for i in range(len(fit_value)):
+		newfit_value.append(fit_value[i] / total_fit)
+	# 计算累计概率
+	cumsum(newfit_value)
+	ms = []
+	pop_len = len(pop)
+	for i in range(pop_len):
+		ms.append(random.random())
+	ms.sort()
+	fitin = 0
+	newin = 0
+	newpop = pop
+	# 转轮盘选择法
+	while newin < pop_len:
+		if(ms[newin] < newfit_value[fitin]):
+			newpop[newin] = pop[fitin]
+			newin = newin + 1
+		else:
+			fitin = fitin + 1
+	pop = newpop
+
+
+
+def func_read_n_ref_blocks(read):
+	ref_blocks=[]
+	if read.cigar:
+		if read.cigar[0][0]==0 or read.cigar[0][0]==2:
+			ref_blocks.append((read.reference_start,read.reference_start+read.cigar[0][1]))
+			seg_start=read.reference_start+read.cigar[0][1]
+		elif read.cigar[0][0]==3:
+			seg_start=read.reference_start+read.cigar[0][1]
+		elif read.cigar[1][0]==0 or read.cigar[1][0]==2:
+			ref_blocks.append((read.reference_start,read.reference_start+read.cigar[1][1]))
+			seg_start=read.reference_start+read.cigar[1][1]
+		elif read.cigar[1][0]==3:
+			seg_start=read.reference_start+read.cigar[1][1]
+		
+		if read.cigar[0][0] in (0,2,3) and len(read.cigar)>1:
+			for i in range(1,len(read.cigar)):
+				if read.cigar[i][0]==3:
+					seg_start=seg_start+read.cigar[i][1]
+				elif read.cigar[i][0]==1:
+					pass
+				elif read.cigar[i][0]==2 or read.cigar[i][0]==0:
+					ref_blocks.append((seg_start,seg_start+read.cigar[i][1]))
+					seg_start=seg_start+read.cigar[i][1]
+		elif read.cigar[1][0] in (0,2,3) and len(read.cigar)>2:
+			for i in range(2,len(read.cigar)):
+				if read.cigar[i][0]==3:
+					seg_start=seg_start+read.cigar[i][1]
+				elif read.cigar[i][0]==1:
+					pass
+				elif read.cigar[i][0]==2 or read.cigar[i][0]==0:
+					ref_blocks.append((seg_start,seg_start+read.cigar[i][1]))
+					seg_start=seg_start+read.cigar[i][1]
+	
+	ref_blocks_new=[] 
+	if len(ref_blocks)==1:
+		ref_blocks_new=ref_blocks
+	else:
+		ref_blocks_new.append(ref_blocks[0])
+		for block_index in range(1,len(ref_blocks)):
+			if ref_blocks[block_index][0]==ref_blocks_new[-1][-1]:
+				ref_blocks_new[-1]=(ref_blocks_new[-1][0],ref_blocks[block_index][1])
+			else:
+				ref_blocks_new.append(ref_blocks[block_index])
+	
+	return ref_blocks_new
+
+
+
+
+def func_iter_nested_list_tuple(nested_list_tuple):
+	plain_list_tuple = []
+	for i in nested_list_tuple:
+		if isinstance(i,list) or isinstance(i,tuple):
+			plain_list_tuple.extend(func_iter_nested_list_tuple(i))
+		else:
+			plain_list_tuple.append(i)
+	return  plain_list_tuple
+
+def func_iter_nested_list(nested_list): 
+	plain_list = []
+	for i in nested_list:
+		if isinstance(i,list):
+			plain_list.extend(func_iter_nested_list(i))
+		else:
+			plain_list.append(i)
+	return  plain_list
+
+
+
+def subpaths_highjunccov(path,junc_count_tuple):  
+	retain = True
+	result_tuple = []
+	result_subset = [junc_count_tuple[0]]
+	for i in range(1,len(junc_count_tuple)):
+		if (junc_count_tuple[i-1][1] <= junc_count_tuple[i][1]):
+			if junc_count_tuple[i][1] <dict_minjunc_fold.get(junc_count_tuple[i-1][1],2)*junc_count_tuple[i-1][1]:
+				if retain:
+					result_subset.append(junc_count_tuple[i])
+				else:
+					result_subset = []
+			else:
+				result_subset = [junc_count_tuple[i]]
+				retain = True
+		else:
+			 if junc_count_tuple[i-1][1] <dict_minjunc_fold.get(junc_count_tuple[i][1],2)*junc_count_tuple[i][1]:
+				if retain:
+					result_subset.append(junc_count_tuple[i])
+				else:
+					result_subset = []
+			 else:
+				 if len(result_subset)>1:
+					 result_tuple.append(result_subset)
+				 result_subset = []
+				 retain = False
+	if len(result_subset)>1:
+		result_tuple.append(result_subset)
+	subpaths=[]
+	for i in result_tuple:
+		subpaths.append(path[zip(*path)[1].index(i[0][0][0]):zip(*path)[0].index(i[-1][0][-1])+1])
+	return subpaths
+
+def cem(CHR,dict_knowntname_innerexonint_strand,dict_knowntname_exon_strand,strand,junction_name):
+	junc_boundary=[]
+	boundary=[]	
+	f=open(junction_name)
+	for line in f:
+		temp=line.split('\t')
+		if temp[0]==CHR and temp[5]==strand:
+			emp=temp[3].split('_')
+			ins=emp[0]
+			if len(boundary)!=0:
+				if ins==boundary[0]:
+					boundary.append((int(temp[1])+20,int(temp[2])-20))
+				else:
+					junc_boundary.append(boundary)
+					boundary=[]
+					boundary.append(ins)
+					boundary.append((int(temp[1])+20,int(temp[2])-20))
+			else:
+				boundary.append(ins)
+				boundary.append((int(temp[1])+20,int(temp[2])-20))				
+				
+	f.close()
+
+	dict_junc_known_strand={}
+	for knowntname in dict_knowntname_innerexonint_strand:
+		dict_junc_known_strand[knowntname]=sorted(list(set(zip(dict_knowntname_innerexonint_strand[knowntname][0::2],dict_knowntname_innerexonint_strand[knowntname][1::2]))))
+
+
+	
+	list_dict_exon_strand=[]
+	path=[]
+	for i in junc_boundary:		
+		ins=i[0]
+		del(i[0])
+		path_tmp=[]
+		exon_tmp=[]
+		path=[]
+		path_tmp.append(i[0])
+		for j in range(len(i)-1):
+			if i[j+1][0]>path_tmp[-1][1]:
+				path_tmp.append(i[j+1])
+			else:
+				exon_tmp.append(i[j+1])
+		path.append(path_tmp)
+	
+		if len(exon_tmp)>0 and len(exon_tmp)<18:			
+			for j in exon_tmp:
+				path_temp=copy.deepcopy(path)
+				path_tmp=[]
+				for k in path_temp:
+					for m in range(len(k)):
+						if k[m][1]>j[0]:
+							k[m]=j
+							break
+					set_k=sorted(set(k),key=k.index)
+					if set_k not in path_tmp:
+						path_tmp.append(set_k)
+				for p in path_tmp:
+					if p not in path:
+						path.append(p)
+		
+		if len(exon_tmp)>=18:				
+			continue
+		
+		dict_junc_strand={}
+		dict_junc_known_strand_keys=sorted(dict_junc_known_strand.keys())
+		sh=0
+		for q in path:		
+			for j in dict_junc_known_strand_keys:
+				if q==dict_junc_known_strand[j]:
+					q=tuple(q)
+				
+					dict_junc_strand[q]=j
+					sh=1
+					break
+			if sh==0:
+				q=tuple(q)
+				list_unknowm_junc_strand.append(q)
+			
+	
+		dict_exon_strand={}		
+		if dict_junc_strand:
+			dict_junc_strand_keys=dict_junc_strand.keys()
+			for f in dict_junc_strand_keys:
+				gtf_annotion=dict_junc_strand[f]
+				
+				key=tuple(dict_knowntname_exon_strand[gtf_annotion])
+				
+				dict_exon_strand[key]=gtf_annotion
+
+		if dict_exon_strand:			
+			list_dict_exon_strand.append(dict_exon_strand)
+	return list_dict_exon_strand
+
+def cem2(CHR,strand,junction_name,instance_name):
+	junc_boundary=[]
+	boundary=[]	
+	f=open(junction_name)
+	for line in f:
+		temp=line.split('\t')
+		if temp[0]==CHR and temp[5]==strand:
+			emp=temp[3].split('_')
+			ins=emp[0]
+			if len(boundary)!=0:
+				if int(ins[4:])==int(boundary[0]):
+					boundary.append((int(temp[1])+20,int(temp[2])-20))
+				else:
+					junc_boundary.append(boundary)
+					boundary=[]
+					boundary.append(ins[4:])
+					boundary.append((int(temp[1])+20,int(temp[2])-20))
+			else:
+				boundary.append(ins[4:])
+				boundary.append((int(temp[1])+20,int(temp[2])-20))				
+				
+	f.close()
+	exon_boundary=[]
+	boundary=[]
+	f=open(instance_name)
+	fp=0
+	fpk=0
+	for line in f:
+		try:	
+			temp=line.split('\t')
+			if line[0]!='@' and temp[0]=='Instance':
+				ins=temp[1].strip('\n')
+			if len(temp)>4:
+				temp[4]=temp[4].strip('\n')
+			if line[0]!='@' and temp[0]=='Boundary' and len(temp)>4 and temp[4]==strand:
+				if boundary:
+					fp=0
+					exon_boundary.append(boundary)
+					boundary=[]
+					if temp[1]==CHR:
+						fp=1	
+						boundary.append(ins)
+				else:
+					if temp[1]==CHR:
+						fp=1
+						boundary.append(ins)
+			if line[0]!='@' and temp[0]=='Boundary' and len(temp)>4 and temp[4]!=strand:
+				fp=0
+			if line[0]!='@' and len(temp)==9 and temp[0]>10000 and temp[1]>10000 and fp==1:
+				if boundary:
+					temp[0]=int(temp[0])
+					temp[1]=int(temp[1])
+					boundary.append((temp[0],temp[1]))	
+		except:
+			continue
+		else:
+			continue
+			
+	f.close()
+	
+	boundary_tmp=[]	
+	list_dict_exon_strand=[]
+
+	for i in exon_boundary:
+		try:
+			dict_exon_strand={}		
+			path=[]
+			boundary_tmp=[]
+			i[0]=str(i[0])
+	
+			if len(i)==3:
+				boundary_tmp.append(i[0])
+				exon_start=i[1][0]
+				exon_end=i[1][1]
+				if i[2][0]==i[1][1] or i[2][0]==i[1][1]+1:
+					exon_end=i[2][1]
+					boundary_tmp.append((exon_start,exon_end))
+				else:
+					boundary_tmp.append(i[1])
+					boundary_tmp.append(i[2])
+		
+			if len(i)>3:
+				boundary_tmp.append(i[0])
+				exon_start=i[1][0]
+				exon_end=i[1][1]
+				for j in range(len(i)-2):
+					if i[j+2][0]==i[j+1][1] or i[j+2][0]==i[j+1][1]+1:
+						exon_end=i[j+2][1]
+					else:
+						boundary_tmp.append((exon_start,exon_end))
+						exon_start=i[j+2][0]
+						exon_end=i[j+2][1]
+				boundary_tmp.append((exon_start,exon_end))
+		
+			
+			if len(boundary_tmp)>2:				
+				ins=boundary_tmp[0]				
+				del(boundary_tmp[0])
+				path_tmp=[]
+				exon_tmp=[]
+				path_tmp.append(boundary_tmp[0])
+				for j in range(len(boundary_tmp)-1):
+					if boundary_tmp[j+1][0]>path_tmp[-1][1]:
+						path_tmp.append(boundary_tmp[j+1])
+					else:
+						exon_tmp.append(boundary_tmp[j+1])
+				path.append(path_tmp)				
+				if len(exon_tmp)>0 and len(exon_tmp)<18:			
+					for j in exon_tmp:
+						path_temp=copy.deepcopy(path)
+						path_tmp=[]
+						for k in path_temp:
+							for m in range(len(k)):
+								if k[m][1]>j[0]:
+									k[m]=j
+									break
+							set_k=sorted(set(k),key=k.index)
+							if set_k not in path_tmp:
+								path_tmp.append(set_k)
+						for p in path_tmp:
+							if p not in path:
+								path.append(p)		
+				if len(exon_tmp)>=18:				
+					continue
+
+				path_temp=[]
+				path_temp=copy.deepcopy(path)
+				for k in junc_boundary:
+					if int(ins)==int(k[0])+1:
+					
+						for p in range(len(k)-1):
+							for q in path_temp:
+								lo=[]
+								fgh=0
+								for r in range(len(q)-2):
+									if k[p+1][0]==q[r][1] and k[p+1][1]==q[r+1][0]-1:
+										break
+									if k[p+1][0]==q[r][1] and k[p+1][1]!=q[r+1][0]-1:
+										for f in range(len(q)-r-1):
+											if k[p+1][1]==q[r+f+2][0]-1:											
+												if lo:												
+													for m in lo:
+														del(q[m])										
+														path.append(q)
+													fgh=1
+													break
+												else:													
+													del(q[r+f+1])										
+													path.append(q)
+													fgh=1
+													break
+											
+											if k[p+1][1]!=q[r+f+2][0]-1:
+												lo.append(r+f+1)
+										if fgh==1:
+											break		
+						break
+				
+				path_tmp=[]
+				ws=[]
+				for p in range(len(path)):
+					for k in range(len(path[p])):
+						ws.append((path[p][k][0]-1,path[p][k][1]))
+					path_tmp.append(ws)
+					ws=[]				
+				path=[]
+				path=path_tmp
+				for p in path:
+					p=tuple(p)
+					dict_exon_strand[p]=()					
+				list_dict_exon_strand.append(dict_exon_strand)
+		except:
+			continue
+		else:
+			continue
+					
+	return list_dict_exon_strand
+
+
+
+def multi_exon(len_strand_left_list,strand_left_list,read_n_strand,strand,samfile_name,CHR,gtf_tuple):
+	samfile = pysam.AlignmentFile(samfile_name,'rb')
+	
+	global gene_strand,dict_gene_strand_knowntname_temp_big
+	
+	if strand=='-':
+		reverse_strand='+'
+	if strand=='+':
+		reverse_strand='-'
+	
+	def check_read(read):
+		return read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand)
+	
+	index=0
+	while index<len_strand_left_list:
+		coord=strand_left_list[index]
+		for i in samfile.fetch(CHR,coord,coord+1):
+			if i.has_tag('XS') and i.get_tag('XS')==strand and 3 in zip(*i.cigar)[0] and i not in set_read_n_seg_dump:
+				break
+		else:
+			index+=1
+			continue
+		
+		read_right_temp=read_left_temp=read_first_junc=i
+		gene_left_second=gene_right_second=''
+		
+		next_coord=read_left_temp.reference_start-50
+		while 1: 
+			
+			
+			
+			if next_coord<=0:
+				gene_left=0
+				break
+			for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+1): 
+				if read_left_temp.cigar:
+					if read_left_temp not in set_read_n_seg_dump and not (read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==reverse_strand):
+						next_coord=read_left_temp.get_blocks()[0][0]-50
+						break
+			else: 
+				gene_left_list=[]
+				for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+51):
+					if read_left_temp.cigar:
+						if read_left_temp not in set_read_n_seg_dump and not (read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==reverse_strand):
+							gene_left_list.append(read_left_temp.reference_start)
+				gene_left=min(gene_left_list)
+				if gene_left==next_coord+50:
+					
+					break
+				else:
+					next_coord=gene_left-50
+		
+		
+		
+		exon_leftouter_right=coord
+		exon_leftouter_len=exon_leftouter_right-gene_left
+		if exon_leftouter_len>700:
+			test_list=range(exon_leftouter_right-1,gene_left,-25)
+			dict_exon_cov_strand[(gene_left,exon_leftouter_right)]=test_cov_list_raw=map(max,zip(*samfile.count_coverage(CHR,gene_left,exon_leftouter_right,read_callback=check_read)))
+			test_cov_list_raw.reverse()
+			test_cov_list=test_cov_list_raw[::25]
+			for i in range(20,len(test_list)-6):
+				if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+					gene_left=test_list[i+3]
+					base_right=gene_left+25
+					cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+					min_cov=min(cov_list)
+					gene_left=base_right-cov_list.index(min_cov)+1
+					dict_exon_cov_strand[(gene_left,exon_leftouter_right)]=test_cov_list_raw[len(test_cov_list_raw)-(exon_leftouter_right-gene_left):]
+					
+					break
+				elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+					gene_left=test_list[i+4]
+					base_right=gene_left+25
+					cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+					min_cov=min(cov_list)
+					gene_left=base_right-cov_list.index(min_cov)+1
+					dict_exon_cov_strand[(gene_left,exon_leftouter_right)]=test_cov_list_raw[len(test_cov_list_raw)-(exon_leftouter_right-gene_left):]
+					
+					break
+			for i in range(len(test_list)-6):
+				if min(test_cov_list[i:i+3])>=2*max(test_cov_list[i+3:i+6]) and min(test_cov_list[i:i+3])>=50:
+					gene_left_second=test_list[i+3]
+					if abs(gene_left_second-gene_left)<500 or abs(gene_left_second-gene_left)<0.5*(exon_leftouter_right-gene_left):
+						gene_left_second=''
+						break
+					base_right=gene_left_second+25
+					cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+					min_cov=min(cov_list)
+					gene_left_second=base_right-cov_list.index(min_cov)+1
+					dict_exon_cov_strand[(gene_left_second,exon_leftouter_right)]=test_cov_list_raw[len(test_cov_list_raw)-(exon_leftouter_right-gene_left_second):]
+					
+					break
+				elif min(test_cov_list[i:i+3])>=2*max(test_cov_list[i+4:i+7]) and min(test_cov_list[i:i+3])>=50:
+					gene_left_second=test_list[i+4]
+					if abs(gene_left_second-gene_left)<500 or abs(gene_left_second-gene_left)<0.5*(exon_leftouter_right-gene_left):
+						gene_left_second=''
+						break
+					base_right=gene_left_second+25
+					cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+					min_cov=min(cov_list)
+					gene_left_second=base_right-cov_list.index(min_cov)+1
+					dict_exon_cov_strand[(gene_left_second,exon_leftouter_right)]=test_cov_list_raw[len(test_cov_list_raw)-(exon_leftouter_right-gene_left_second):]
+					
+					break
+			
+			
+		
+		exon_list_ini=[[]]
+		
+		first_junc_n_count=zip(*read_first_junc.cigar)[0].count(3)
+		read_n_ref_blocks=func_read_n_ref_blocks(read_first_junc)
+		exon_list_ini[-1].append((gene_left,read_n_ref_blocks[0][1])) 
+		exon_left_temp=read_n_ref_blocks[1][0]
+		
+		
+		next_coord=read_right_temp.reference_end+50
+		
+		
+		while 1: 
+			
+			for read_right_temp in samfile.fetch(CHR,next_coord,next_coord+1): 
+				
+				if read_right_temp.cigar:
+					if 3 not in zip(*read_right_temp.cigar)[0] and (not read_right_temp.has_tag('XS') or read_right_temp.get_tag('XS')==strand):
+						next_coord=read_right_temp.reference_end+50
+						break
+					elif not read_right_temp in set_read_n_seg_dump and zip(*read_right_temp.cigar)[0].count(3) and read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==strand:
+						
+						read_n_ref_blocks=func_read_n_ref_blocks(read_right_temp)
+						exon_right_temp=read_n_ref_blocks[0][1]
+						if exon_right_temp>exon_left_temp:
+							exon_list_ini[-1].append((exon_left_temp,exon_right_temp))
+						else: 
+							exon_list_ini.append([])
+						exon_left_temp=read_n_ref_blocks[1][0]
+						next_coord=read_right_temp.reference_end+50
+						break
+			else: 
+				gene_right_list=[]
+				for read_right_temp in samfile.fetch(CHR,next_coord-51,next_coord):
+					if read_right_temp.cigar:
+						
+						if read_right_temp not in set_read_n_seg_dump and not (read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==reverse_strand):
+							gene_right_list.append(read_right_temp.reference_end)
+				gene_right=max(gene_right_list)
+				if gene_right==next_coord-50:
+					
+					break
+				else:
+					next_coord=gene_right+50
+		
+		exon_list_ini[-1].append((exon_left_temp,gene_right))
+		
+		index_left=index
+		index_right=index=bisect.bisect_left(strand_left_list,gene_right)
+		
+		
+		junc_all=read_n_strand[index_left:index_right]
+		junc_all_point=sorted(set(func_iter_nested_list_tuple(junc_all)))
+		junc_all_point_dict={}.fromkeys(junc_all_point,0)
+		for junc in junc_all:
+			for junc_point in junc_all_point[junc_all_point.index(junc[0]):junc_all_point.index(junc[1])]:
+				junc_all_point_dict[junc_point]+=1
+		
+		region_nojunc=[]
+		for junc_point_index in range(len(junc_all_point)-1):
+			if not junc_all_point_dict[junc_all_point[junc_point_index]]:
+				region_nojunc.append((junc_all_point[junc_point_index],junc_all_point[junc_point_index+1]))
+		
+		for region in region_nojunc:
+			test_left=region[0]
+			test_right=region[1]
+			if test_right-test_left>2000:
+				
+				test_list=range(test_left,test_right,25)
+				dict_exon_cov_strand[(test_left,test_right)]=test_cov_list_raw=map(max,zip(*samfile.count_coverage(CHR,test_left,test_right,read_callback=check_read)))
+				test_cov_list=test_cov_list_raw[::25]
+				for i in range(20,len(test_list)-6):
+					if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]) and float(test_list[i+3]-test_left)/float(test_right-test_left)<0.9:
+						gene_right=test_list[i+3]
+						base_left=gene_right-25
+						cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+						min_cov=min(cov_list)
+						gene_right=base_left+cov_list.index(min_cov)
+						
+						index_right=index=bisect.bisect_left(strand_left_list,gene_right)
+						junc_all=read_n_strand[index_left:index_right]
+						for block_index in range(len(exon_list_ini)):
+							exon_list_ini[block_index]=filter(lambda x:x[0]<=test_left,exon_list_ini[block_index])
+							for exon_index in range(len(exon_list_ini[block_index])):
+								if exon_list_ini[block_index][exon_index][0]==test_left:
+									exon_list_ini[block_index][exon_index]=(test_left,gene_right)
+						dict_exon_cov_strand[(test_left,gene_right)]=test_cov_list_raw[0:gene_right-test_left]
+						
+						break
+					elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+						gene_right=test_list[i+4]
+						base_left=gene_right-25
+						cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+						min_cov=min(cov_list)
+						gene_right=base_left+cov_list.index(min_cov)
+						
+						index_right=index=bisect.bisect_left(strand_left_list,gene_right)
+						junc_all=read_n_strand[index_left:index_right]
+						for block_index in range(len(exon_list_ini)):
+							exon_list_ini[block_index]=filter(lambda x:x[0]<=test_left,exon_list_ini[block_index])
+							for exon_index in range(len(exon_list_ini[block_index])):
+								if exon_list_ini[block_index][exon_index][0]==test_left:
+									exon_list_ini[block_index][exon_index]=(test_left,gene_right)
+						dict_exon_cov_strand[(test_left,gene_right)]=test_cov_list_raw[0:gene_right-test_left]
+						
+						break
+				else:
+					continue
+				break
+		
+		exon_rightouter_left=max(map(lambda x:x[1],junc_all))
+		exon_rightouter_len=gene_right-exon_rightouter_left
+		if exon_rightouter_left>=gene_right: 
+			
+			continue
+			
+		if exon_list_ini[-1] and exon_list_ini[-1][-1][-1]==gene_right: 
+			if exon_rightouter_len>700:
+				test_list=range(exon_rightouter_left,gene_right,25)
+				dict_exon_cov_strand[(exon_rightouter_left,gene_right)]=test_cov_list_raw=map(max,zip(*samfile.count_coverage(CHR,exon_rightouter_left,gene_right,read_callback=check_read)))
+				test_cov_list=test_cov_list_raw[::25]
+				for i in range(20,len(test_list)-6):
+					if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+						gene_right=test_list[i+3]
+						base_left=gene_right-25
+						cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+						min_cov=min(cov_list)
+						gene_right=base_left+cov_list.index(min_cov)
+						exon_list_ini[-1][-1]=(exon_list_ini[-1][-1][0],gene_right)
+						dict_exon_cov_strand[(exon_rightouter_left,gene_right)]=test_cov_list_raw[0:gene_right-exon_rightouter_left]
+						
+						break
+					elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+						gene_right=test_list[i+4]
+						base_left=gene_right-25
+						cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+						min_cov=min(cov_list)
+						gene_right=base_left+cov_list.index(min_cov)
+						exon_list_ini[-1][-1]=(exon_list_ini[-1][-1][0],gene_right)
+						dict_exon_cov_strand[(exon_rightouter_left,gene_right)]=test_cov_list_raw[0:gene_right-exon_rightouter_left]
+						
+						break
+				for i in range(len(test_list)-6):
+					if min(test_cov_list[i:i+3])>=2*max(test_cov_list[i+3:i+6]) and min(test_cov_list[i:i+3])>=50:
+						gene_right_second=test_list[i+3]
+						if abs(gene_right_second-gene_right)<500 or abs(gene_right_second-gene_right)<0.5*(gene_right-exon_rightouter_left):
+							gene_right_second=''
+							break
+						base_left=gene_right_second-25
+						cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+						min_cov=min(cov_list)
+						gene_right_second=base_left+cov_list.index(min_cov)
+						
+						dict_exon_cov_strand[(exon_rightouter_left,gene_right_second)]=test_cov_list_raw[0:gene_right_second-exon_rightouter_left]
+						
+						break
+					elif min(test_cov_list[i:i+3])>=2*max(test_cov_list[i+4:i+7]) and min(test_cov_list[i:i+3])>=50:
+						gene_right_second=test_list[i+4]
+						if abs(gene_right_second-gene_right)<500 or abs(gene_right_second-gene_right)<0.5*(gene_right-exon_rightouter_left):
+							gene_right_second=''
+							break
+						base_left=gene_right_second-25
+						cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+						min_cov=min(cov_list)
+						gene_right_second=base_left+cov_list.index(min_cov)
+						
+						dict_exon_cov_strand[(exon_rightouter_left,gene_right_second)]=test_cov_list_raw[0:gene_right_second-exon_rightouter_left]
+						
+						break
+		
+		if exon_leftouter_right-gene_left>1000:
+			pass
+			
+		
+		if gene_right-exon_rightouter_left>1000:
+			pass
+			
+		
+		
+		gene_edge_strand.append((gene_left,gene_right))
+		
+		
+		
+		
+		
+		cov_tested=0
+		
+		if sum(map(len,exon_list_ini))==len(junc_all)+1 and len(exon_list_ini)==1: 
+			dict_junc_exon={}
+			for junc in junc_all:
+				dict_junc_exon[junc]=[[],[]]
+			for junc_index in range(len(junc_all)):
+				dict_junc_exon[junc_all[junc_index]][0].append(exon_list_ini[0][junc_index])
+				dict_junc_exon[junc_all[junc_index]][1].append(exon_list_ini[0][junc_index+1])
+			
+		else:
+			junc_ini=[] 
+			for block in exon_list_ini:
+				if len(block)>1:
+					for exon_index in range(len(block)-1):
+						junc_ini.append((block[exon_index][1],block[exon_index+1][0]))
+			
+			set_junc_ini=set(junc_ini) 
+			junc_unused=[]
+			for junc in junc_all:
+				if junc not in set_junc_ini:
+					junc_unused.append(junc)
+			
+			for junc in junc_unused:
+				for block_index in range(len(exon_list_ini)):
+					for exon_index in range(len(exon_list_ini[block_index])):
+							exon_left_temp=exon_list_ini[block_index][exon_index][0]
+							exon_right_temp=exon_list_ini[block_index][exon_index][1]
+							if exon_left_temp<junc[0] and exon_right_temp>junc[1]:
+									exon_list_ini[block_index][exon_index]=(exon_left_temp,junc[0])
+									exon_list_ini[block_index].insert(exon_index+1,(junc[1],exon_right_temp))
+									break 
+					else:
+						continue
+					break
+			
+			if sum(map(len,exon_list_ini))==len(junc_all)+1 and len(exon_list_ini)==1: 
+				dict_junc_exon={}
+				for junc in junc_all:
+					dict_junc_exon[junc]=[[],[]]
+				for junc_index in range(len(junc_all)):
+					dict_junc_exon[junc_all[junc_index]][0].append(exon_list_ini[0][junc_index])
+					dict_junc_exon[junc_all[junc_index]][1].append(exon_list_ini[0][junc_index+1])
+			else:
+				dict_junc_exon={}
+				dict_juncpoint_junc={}
+				dict_leftjuncpoint_junc={}
+				dict_rightjuncpoint_junc={}
+				
+				for junc in junc_all:
+					dict_junc_exon[junc]=[[],[]] 
+					dict_leftjuncpoint_junc.setdefault(junc[0],[]).append(junc)
+					dict_rightjuncpoint_junc.setdefault(junc[1],[]).append(junc)
+					dict_juncpoint_junc.setdefault(junc[0],[]).append(junc)
+					dict_juncpoint_junc.setdefault(junc[1],[]).append(junc)
+				
+				exon_set_ini=[]
+				for block in exon_list_ini:
+					for exon in block:
+						exon_set_ini.append(exon)
+						if exon[1] in dict_leftjuncpoint_junc:
+							for junc in dict_leftjuncpoint_junc[exon[1]]:
+								dict_junc_exon[junc][0].append(exon)
+						if exon[0] in dict_rightjuncpoint_junc:
+							for junc in dict_rightjuncpoint_junc[exon[0]]:
+								dict_junc_exon[junc][1].append(exon)
+				
+				exon_set_ini=set(exon_set_ini)
+				
+				rightjuncpoint_sorted=sorted(dict_rightjuncpoint_junc)
+				leftjuncpoint_sorted=sorted(dict_leftjuncpoint_junc)
+				
+				rightjuncpoint_sorted.insert(0,gene_left)
+				leftjuncpoint_sorted.append(gene_right)
+				
+				
+				
+				
+				
+				
+				if 'hehe':
+					exon_cand_list=[] 
+					in_lefts=rightjuncpoint_sorted
+					in_rights=leftjuncpoint_sorted
+					
+					in_right_serial_number_dict={}
+					i_in_left=0
+					j_in_right=0
+					serial_number=0
+					while 1:
+						if(i_in_left==len(in_lefts) or j_in_right==len(in_rights)):
+							break
+						if(in_lefts[i_in_left]<in_rights[j_in_right]):
+							i_in_left=i_in_left+1
+							serial_number=serial_number+1
+						else:
+							in_right_serial_number_dict.setdefault(serial_number,set()).add(in_rights[j_in_right])
+							j_in_right=j_in_right+1
+					
+					while j_in_right<len(in_rights):
+						in_right_serial_number_dict.setdefault(serial_number,set()).add(in_rights[j_in_right])
+						j_in_right=j_in_right+1
+					
+					in_right_serial_number_list=sorted(in_right_serial_number_dict.keys())
+					
+					i_in_left=0
+					j_in_right=0
+					while 1:
+						if(i_in_left==len(in_lefts) or j_in_right==len(in_right_serial_number_list)):
+							break
+						while(in_lefts[i_in_left]>=max(in_right_serial_number_dict[in_right_serial_number_list[j_in_right]])):
+							j_in_right=j_in_right+1
+						for in_right in in_right_serial_number_dict[in_right_serial_number_list[j_in_right]]:
+							exon_cand_list.append((in_lefts[i_in_left],in_right))
+						i_in_left=i_in_left+1
+				
+				exon_leftouter=None
+				exon_rightouter=None
+				for exon_cand in exon_set_ini:
+					if exon_cand[0]==gene_left:
+						exon_leftouter=exon_cand
+					if exon_cand[1]==gene_right:
+						exon_rightouter=exon_cand
+				
+				exon_nonset_ini_len=0
+				for exon_cand in exon_cand_list:
+					if exon_cand!=exon_leftouter and exon_cand!=exon_rightouter:
+						exon_nonset_ini_len+=exon_cand[1]-exon_cand[0]
+				
+				
+				
+				if float(exon_nonset_ini_len)/float(gene_right-gene_left)>0.2:
+					
+					gene_cov_strand_temp=map(max,zip(*samfile.count_coverage(CHR,gene_left,gene_right,read_callback=check_read)))
+					for exon_cand in exon_cand_list:
+						exon_cand_left=exon_cand[0]
+						exon_cand_right=exon_cand[1]
+						dict_exon_cov_strand[(exon_cand_left,exon_cand_right)]=gene_cov_strand_temp[exon_cand_left-gene_left:exon_cand_right-gene_left]
+					cov_tested=1
+				
+				for exon_cand in exon_cand_list:
+					if exon_cand in exon_set_ini: 
+						pass
+					else:
+						exon_cand_left=exon_cand[0]
+						exon_cand_right=exon_cand[1]
+						
+						
+						if not cov_tested:
+							exon_cov_temp=dict_exon_cov_strand[(exon_cand_left,exon_cand_right)]=map(max,zip(*samfile.count_coverage(CHR,exon_cand_left,exon_cand_right,read_callback=check_read)))
+							
+						else:
+							exon_cov_temp=dict_exon_cov_strand[(exon_cand_left,exon_cand_right)]
+						if exon_cand_right-exon_cand_left<=200:
+							if exon_cand_left in dict_rightjuncpoint_junc:
+								for junc in dict_rightjuncpoint_junc[exon_cand_left]:
+									dict_junc_exon[junc][1].append(exon_cand)
+							if exon_cand_right in dict_leftjuncpoint_junc:
+								for junc in dict_leftjuncpoint_junc[exon_cand_right]:
+									dict_junc_exon[junc][0].append(exon_cand)
+						else:
+							if exon_cand_left in dict_juncpoint_junc and exon_cand_right in dict_juncpoint_junc: 
+								
+								for i in samfile.fetch(CHR,exon_cand_left,exon_cand_left+1):
+									
+									
+									if 3 in zip(*i.cigar)[0] and i.has_tag('XS') and i.get_tag('XS')==strand and i not in set_read_n_seg_dump:
+										i_ref_blocks=func_read_n_ref_blocks(i)
+										if exon_cand_left in zip(*i_ref_blocks)[0]:
+											break
+										'''
+										for i_exon_index in range(len(i_ref_blocks)-1):
+											if i_ref_blocks[i_exon_index][1]>=exon_cand_right or i_ref_blocks[i_exon_index+1][0]<=exon_cand_left:
+												pass
+											else:
+												break
+										else: 
+											break
+										'''
+								else:
+									break
+								
+								read_right_temp=i
+								
+								next_coord=read_right_temp.reference_end+50
+								t_right=exon_cand_left
+								while 1: 
+									if next_coord>=exon_cand_right:
+										t_right=exon_cand_right
+										break
+									for read_right_temp in samfile.fetch(CHR,next_coord,next_coord+1):
+										if read_right_temp.cigar:
+											if not 3 in zip(*read_right_temp.cigar)[0] and (not read_right_temp.has_tag('XS') or read_right_temp.get_tag('XS')!=reverse_strand):
+												next_coord=read_right_temp.reference_end+50
+												break
+											elif read_right_temp not in set_read_n_seg_dump and 3 in zip(*read_right_temp.cigar)[0] and read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==strand:
+												read_right_temp_ref_blocks=func_read_n_ref_blocks(read_right_temp)
+												
+												if exon_cand_left in zip(*read_right_temp_ref_blocks)[0]:
+													next_coord=read_right_temp.reference_end+50
+													break
+									else: 
+										t_right_list=[]
+										for read_right_temp in samfile.fetch(CHR,next_coord-51,next_coord):
+											if read_right_temp.cigar:
+												if not 3 in zip(*read_right_temp.cigar)[0] and (not read_right_temp.has_tag('XS') or read_right_temp.get_tag('XS')!=reverse_strand):
+													t_right_list.append(read_right_temp.reference_end)
+												elif read_right_temp not in set_read_n_seg_dump and 3 in zip(*read_right_temp.cigar)[0] and read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==strand:
+													read_right_temp_ref_blocks=func_read_n_ref_blocks(read_right_temp)
+													
+													if exon_cand_left in zip(*read_right_temp_ref_blocks)[0]:
+														t_right_list.append(read_right_temp.reference_end)
+										t_right=max(t_right_list)
+										if t_right==next_coord-50:
+											break
+										else:
+											next_coord=t_right+50
+								
+								if t_right-exon_cand_left>200:
+									test_list=range(exon_cand_left,t_right,25)
+									test_cov_list_raw=exon_cov_temp[0:t_right-exon_cand_left]
+									test_cov_list=test_cov_list_raw[::25]
+									for i in range(len(test_list)-6):
+										if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+											t_right=test_list[i+3]
+											base_left=t_right-25
+											cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+											min_cov=min(cov_list)
+											t_right=base_left+cov_list.index(min_cov)
+											
+											break
+										elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+											t_right=test_list[i+4]
+											base_left=t_right-25
+											cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+											min_cov=min(cov_list)
+											t_right=base_left+cov_list.index(min_cov)
+											
+											break
+								
+								
+								if t_right>=exon_cand_right:
+									dict_exon_cov_strand[(exon_cand_left,exon_cand_right)]=exon_cov_temp
+									for junc in dict_leftjuncpoint_junc[exon_cand_right]: 
+										dict_junc_exon[junc][0].append((exon_cand_left,exon_cand_right))
+									for junc in dict_rightjuncpoint_junc[exon_cand_left]:
+										dict_junc_exon[junc][1].append((exon_cand_left,exon_cand_right))
+								else:
+									dict_exon_cov_strand[(exon_cand_left,t_right)]=exon_cov_temp[0:t_right-exon_cand_left]
+									t_left=exon_cand_right
+									for i in samfile.fetch(CHR,exon_cand_right,exon_cand_right+1):
+										if 3 in zip(*i.cigar)[0] and i.has_tag('XS') and i.get_tag('XS')==strand and i not in set_read_n_seg_dump:
+											i_ref_blocks=func_read_n_ref_blocks(i)
+											if exon_cand_right in zip(*i_ref_blocks)[1]:
+												break
+											'''
+											for i_exon_index in range(len(i_ref_blocks)-1):
+												if i_ref_blocks[i_exon_index][1]>=exon_cand_right or i_ref_blocks[i_exon_index+1][0]<=exon_cand_left:
+													pass
+												else:
+													break
+											else: 
+												break
+											'''
+									else:
+										break
+									
+									read_left_temp=i
+									
+									next_coord=read_left_temp.reference_start-50
+									while 1: 
+										if next_coord<=exon_cand_left:
+											t_left=exon_cand_left
+											break
+										
+										for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+1): 
+											if read_left_temp.cigar:
+												if not 3 in zip(*read_left_temp.cigar)[0] and (not read_left_temp.has_tag('XS') or read_left_temp.get_tag('XS')!=reverse_strand):
+													next_coord=read_left_temp.get_blocks()[0][0]-50
+													break
+												elif read_left_temp not in set_read_n_seg_dump and 3 in zip(*read_left_temp.cigar)[0] and read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==strand:
+													read_left_temp_ref_blocks=func_read_n_ref_blocks(read_left_temp)
+													if exon_cand_right in zip(*read_left_temp_ref_blocks)[1]:
+													
+														next_coord=read_left_temp.get_blocks()[0][0]-50 
+														break
+										else: 
+											t_left_list=[]
+											for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+51):
+												if read_left_temp.cigar:
+													if not 3 in zip(*read_left_temp.cigar)[0] and (not read_left_temp.has_tag('XS') or read_left_temp.get_tag('XS')!=reverse_strand):
+														t_left_list.append(read_left_temp.reference_start)
+													elif read_left_temp not in set_read_n_seg_dump and 3 in zip(*read_left_temp.cigar)[0] and read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==strand:
+														read_left_temp_ref_blocks=func_read_n_ref_blocks(read_left_temp)
+														if exon_cand_right in zip(*read_left_temp_ref_blocks)[1]:
+														
+															t_left_list.append(read_left_temp.reference_start)
+											t_left=min(t_left_list)
+											if t_left==next_coord+50:
+												break
+											else:
+												next_coord=t_left-50
+									
+									if exon_cand_right-t_left>200:
+										test_list=range(exon_cand_right-1,t_left,-25)
+										test_cov_list_raw=exon_cov_temp[len(exon_cov_temp)-(exon_cand_right-t_left):]
+										test_cov_list_raw.reverse()
+										test_cov_list=test_cov_list_raw[::25]
+										for i in range(len(test_list)-6):
+											if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+												t_left=test_list[i+3]
+												base_right=t_left+25
+												cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+												min_cov=min(cov_list)
+												t_left=base_right-cov_list.index(min_cov)+1
+												
+												break
+											elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+												t_left=test_list[i+4]
+												base_right=t_left+25
+												cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+												min_cov=min(cov_list)
+												t_left=base_right-cov_list.index(min_cov)+1
+												
+												break
+									
+									if t_left<exon_cand_left:
+										t_left=exon_cand_left
+									dict_exon_cov_strand[(t_left,exon_cand_right)]=exon_cov_temp[t_left-exon_cand_left:] 
+									
+									
+									for junc in dict_leftjuncpoint_junc[exon_cand_right]:
+										dict_junc_exon[junc][0].append((t_left,exon_cand_right))
+									for junc in dict_rightjuncpoint_junc[exon_cand_left]:
+										dict_junc_exon[junc][1].append((exon_cand_left,t_right))
+							
+							elif exon_cand_left==gene_left: 
+								
+								for i in samfile.fetch(CHR,exon_cand_right,exon_cand_right+1):
+									if 3 in zip(*i.cigar)[0] and i.has_tag('XS') and i.get_tag('XS')==strand and i not in set_read_n_seg_dump:
+										i_ref_blocks=func_read_n_ref_blocks(i)
+										
+										if exon_cand_right in zip(*i_ref_blocks)[1]:
+											break
+								else:
+									break
+								read_left_temp=i
+								
+								next_coord=read_left_temp.reference_start-50
+								while 1: 
+									if next_coord<=gene_left:
+										t_left=gene_left
+										break
+									for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+1): 
+										if read_left_temp.cigar:
+											if not 3 in zip(*read_left_temp.cigar)[0] and (not read_left_temp.has_tag('XS') or read_left_temp.get_tag('XS')!=reverse_strand):
+												next_coord=read_left_temp.get_blocks()[0][0]-50 
+												break
+											elif read_left_temp not in set_read_n_seg_dump and 3 in zip(*read_left_temp.cigar)[0] and read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==strand:
+												read_left_temp_ref_blocks=func_read_n_ref_blocks(read_left_temp)
+												
+												if exon_cand_right in zip(*read_left_temp_ref_blocks)[1]:
+													next_coord=read_left_temp.get_blocks()[0][0]-50 
+													break
+									else: 
+										t_left_list=[]
+										for read_left_temp in samfile.fetch(CHR,next_coord,next_coord+51):
+											if read_left_temp.cigar:
+												if not 3 in zip(*read_left_temp.cigar)[0] and (not read_left_temp.has_tag('XS') or read_left_temp.get_tag('XS')!=reverse_strand):
+													t_left_list.append(read_left_temp.reference_start)
+												elif read_left_temp not in set_read_n_seg_dump and 3 in zip(*read_left_temp.cigar)[0] and read_left_temp.has_tag('XS') and read_left_temp.get_tag('XS')==strand:
+													read_left_temp_ref_blocks=func_read_n_ref_blocks(read_left_temp)
+													
+													if exon_cand_right in zip(*read_left_temp_ref_blocks)[1]:
+														t_left_list.append(read_left_temp.reference_start)
+										t_left=min(t_left_list)
+										if t_left==next_coord+50:
+											break
+										else:
+											next_coord=t_left-50
+								
+								if exon_cand_right-t_left>200:
+									test_list=range(exon_cand_right-1,t_left,-25)
+									test_cov_list_raw=exon_cov_temp[len(exon_cov_temp)-(exon_cand_right-t_left):]
+									test_cov_list_raw.reverse()
+									test_cov_list=test_cov_list_raw[::25]
+									for i in range(len(test_list)-6):
+										if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+											t_left=test_list[i+3]
+											base_right=t_left+25
+											cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+											min_cov=min(cov_list)
+											t_left=base_right-cov_list.index(min_cov)+1
+											
+											break
+										elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+											t_left=test_list[i+4]
+											base_right=t_left+25
+											cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+											min_cov=min(cov_list)
+											t_left=base_right-cov_list.index(min_cov)+1
+											
+											break
+								
+								if t_left<gene_left:
+									t_left=gene_left
+								
+								dict_exon_cov_strand[(t_left,exon_cand_right)]=exon_cov_temp[t_left-exon_cand_left:]
+								
+								
+								
+								for junc in dict_leftjuncpoint_junc[exon_cand_right]:
+									dict_junc_exon[junc][0].append((t_left,exon_cand_right))
+							
+							elif exon_cand_right==gene_right:
+								
+								for i in samfile.fetch(CHR,exon_cand_left,exon_cand_left+1):
+									if 3 in zip(*i.cigar)[0] and i.has_tag('XS') and i.get_tag('XS')==strand and i not in set_read_n_seg_dump:
+										i_ref_blocks=func_read_n_ref_blocks(i)
+										
+										if exon_cand_left in zip(*i_ref_blocks)[0]:
+											break
+								else:
+									break
+								read_right_temp=i
+								
+								next_coord=read_right_temp.reference_end+50
+								while 1: 
+									if next_coord>=gene_right:
+										t_right=gene_right
+										break
+									for read_right_temp in samfile.fetch(CHR,next_coord,next_coord+1):
+										if read_right_temp.cigar:
+											if not 3 in zip(*read_right_temp.cigar)[0] and (not read_right_temp.has_tag('XS') or read_right_temp.get_tag('XS')!=reverse_strand):
+												next_coord=read_right_temp.reference_end+50
+												break
+											elif read_right_temp not in set_read_n_seg_dump and 3 in zip(*read_right_temp.cigar)[0] and read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==strand:
+												read_right_temp_ref_blocks=func_read_n_ref_blocks(read_right_temp)
+												if exon_cand_left in zip(*read_right_temp_ref_blocks)[0]:
+												
+													next_coord=read_right_temp.reference_end+50
+													break
+									else: 
+										t_right_list=[]
+										for read_right_temp in samfile.fetch(CHR,next_coord-51,next_coord):
+											if read_right_temp.cigar:
+												if not 3 in zip(*read_right_temp.cigar)[0] and (not read_right_temp.has_tag('XS') or read_right_temp.get_tag('XS')!=reverse_strand):
+													t_right_list.append(read_right_temp.reference_end)
+												elif read_right_temp not in set_read_n_seg_dump and 3 in zip(*read_right_temp.cigar)[0] and read_right_temp.has_tag('XS') and read_right_temp.get_tag('XS')==strand:
+													read_right_temp_ref_blocks=func_read_n_ref_blocks(read_right_temp)
+													if exon_cand_left in zip(*read_right_temp_ref_blocks)[0]:
+													
+														t_right_list.append(read_right_temp.reference_end)
+										t_right=max(t_right_list)
+										if t_right==next_coord-50:
+											break
+										else:
+											next_coord=t_right+50
+								
+								if t_right-exon_cand_left>200:
+									test_list=range(exon_cand_left,t_right,25)
+									test_cov_list_raw=exon_cov_temp[0:t_right-exon_cand_left]
+									test_cov_list=test_cov_list_raw[::25]
+									for i in range(len(test_list)-6):
+										if min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+3:i+6]):
+											t_right=test_list[i+3]
+											base_left=t_right-25
+											cov_list=test_cov_list_raw[(i+3)*25-25:(i+3)*25+25]
+											min_cov=min(cov_list)
+											t_right=base_left+cov_list.index(min_cov)
+											
+											break
+										elif min(test_cov_list[i:i+3])>=3*max(test_cov_list[i+4:i+7]):
+											t_right=test_list[i+4]
+											base_left=t_right-25
+											cov_list=test_cov_list_raw[(i+4)*25-25:(i+4)*25+25]
+											min_cov=min(cov_list)
+											t_right=base_left+cov_list.index(min_cov)
+											
+											break
+								
+								if t_right>gene_right:
+									t_right=gene_right
+								dict_exon_cov_strand[(exon_cand_left,t_right)]=exon_cov_temp[0:t_right-exon_cand_left]
+								
+								
+								for junc in dict_rightjuncpoint_junc[exon_cand_left]:
+									dict_junc_exon[junc][1].append((exon_cand_left,t_right))
+								
+		for junc in dict_junc_exon:
+			dict_junc_exon[junc][0]=list(set(dict_junc_exon[junc][0]))
+			dict_junc_exon[junc][1]=list(set(dict_junc_exon[junc][1]))
+			if not dict_junc_exon[junc][0] or not dict_junc_exon[junc][1]:
+				pass
+		
+		edges=[]
+		for junc in dict_junc_exon:
+			for exon0 in dict_junc_exon[junc][0]:
+				
+				
+				for exon1 in dict_junc_exon[junc][1]:
+					edges.append((exon0,exon1))
+			for exon1 in dict_junc_exon[junc][1]:
+				pass
+				
+				
+		
+		new_paths=[]  
+		while True:
+			
+			flag=0
+			temp_list=[]
+			used_path_index=[]
+			for i in edges:
+				for j_index in range(len(new_paths)):
+					if new_paths[j_index][-1][-1]==i[0]:
+						flag=1
+						
+						temp_list.append(new_paths[j_index]+[i])
+						used_path_index.append(j_index)
+			new_paths_paths=[]
+			for j_index in range(len(new_paths)):
+				if j_index not in used_path_index:
+					new_paths_paths.append(new_paths[j_index])
+			new_paths_paths.extend(temp_list)
+			new_paths=copy.deepcopy(new_paths_paths)
+			
+			temp_list=[]
+			used_path_index=[]
+			for i in edges:
+				for j_index in range(len(new_paths)):
+					if new_paths[j_index][0][0]==i[1]:
+						flag=1
+						
+						temp_list.append([i]+new_paths[j_index])
+						used_path_index.append(j_index)
+			new_paths_paths=[]
+			for j_index in range(len(new_paths)):
+				if j_index not in used_path_index:
+					new_paths_paths.append(new_paths[j_index])
+			new_paths_paths.extend(temp_list)
+			new_paths=copy.deepcopy(new_paths_paths)
+			
+			if flag==0:
+				for i in edges:
+					if i not in func_iter_nested_list(new_paths):
+						new_paths.append([i])
+						break
+				else:
+					break
+		
+		paths_temp=[]
+		for i in new_paths:
+			new_path_temp=[]
+			for j_index in range(len(i)):
+				 new_path_temp.append(i[j_index][0])
+			new_path_temp.append(i[-1][-1])
+			paths_temp.append(new_path_temp)
+		
+		
+		paths_temp_temp=copy.deepcopy(paths_temp)
+		
+		paths_temp=[]
+		for path in paths_temp_temp:
+			t_edge_strand.append((path[0][0],path[-1][-1]))
+			if len(path)==2:
+				if (path[0][1],path[1][0]) not in knownjuncs_all and ((path[1][0]-path[0][1]<=10000 and float(read_n_count_dict[(path[0][1],path[1][0])][5])/dict_junc_count[(path[0][1],path[1][0])]<0.2) or (path[1][0]-path[0][1]>10000 and float(read_n_count_dict[(path[0][1],path[1][0])][5])/dict_junc_count[(path[0][1],path[1][0])]<0.35)):
+					pass
+				else:
+					paths_temp.append((path[0][0],path[0][1],path[1][0],path[1][1]))
+			elif len(path)>2:
+				path_temp=[]
+				path_temp.append(path[0][0])
+				for exon_index in range(len(path)-1):
+					junc_1=read_n_count_dict[(path[exon_index][1],path[exon_index+1][0])][5]
+					junc_sum=dict_junc_count[(path[exon_index][1],path[exon_index+1][0])]
+					if (path[exon_index][1],path[exon_index+1][0]) not in knownjuncs_all:
+						if (path[exon_index+1][0]-path[exon_index][1]>10000 and float(junc_1)/float(junc_sum)<0.35) or (path[exon_index+1][0]-path[exon_index][1]<=10000 and junc_sum>=5 and float(junc_1)/float(junc_sum)<0.1):
+							if cov_tested:
+								if gene_cov_strand_temp[path[exon_index][1]-gene_left]>10*junc_sum or gene_cov_strand_temp[path[exon_index+1][0]-1-gene_left]>10*junc_sum:
+									pass
+								else:
+									
+									break
+							else:
+								if map(max,zip(*samfile.count_coverage(CHR,path[exon_index][1],path[exon_index][1]+1,read_callback=check_read)))[0]>10*junc_sum or map(max,zip(*samfile.count_coverage(CHR,path[exon_index+1][0]-1,path[exon_index+1][0],read_callback=check_read)))[0]>10*junc_sum:
+									pass
+								else:
+									
+									break
+						else:
+							path_temp.append(path[exon_index][1])
+							path_temp.append(path[exon_index+1][0])
+					else:
+						path_temp.append(path[exon_index][1])
+						path_temp.append(path[exon_index+1][0])
+				else:
+					path_temp.append(path[-1][-1])
+					paths_temp.append(tuple(path_temp))
+		
+		paths_temp=list(set(paths_temp))
+		paths_temp_temp=copy.deepcopy(paths_temp)
+		paths_temp=[]
+		for path in paths_temp_temp:
+			paths_temp.append(zip(path[0::2],path[1::2]))
+		
+		paths_temp_temp=copy.deepcopy(paths_temp)
+		paths_temp=[]
+		for path in paths_temp_temp:
+			if path[0][1]-path[0][0]<5 and len(path)>2:
+				path=path[1:]
+			if path[-1][1]-path[-1][0]<5 and len(path)>2:
+				path=path[:-1]
+			if path not in paths_temp:
+				paths_temp.append(path)
+		
+		
+		paths_temp_gene_left_second=[] 
+		if gene_left_second:
+			
+			for path in paths_temp:
+				if path[0][0]==gene_left:
+					paths_temp_gene_left_second.append([(gene_left_second,path[0][1])]+path[1:])
+			paths_temp.extend(paths_temp_gene_left_second)
+		
+		paths_temp_gene_right_second=[]
+		if gene_right_second:
+			
+			for path in paths_temp:
+				if path[-1][-1]==gene_right:
+					paths_temp_gene_right_second.append(path[:-1]+[(path[-1][0],gene_right_second)])
+			paths_temp.extend(paths_temp_gene_right_second)
+		
+		
+		
+		
+		len_paths_temp=len(paths_temp)
+		if len_paths_temp>1:
+			t_inner=[]   
+			for path in paths_temp:
+				t_inner.append(func_iter_nested_list_tuple(path)[1:-1])
+			
+			t_junk_index=[]
+			for t_index in range(len_paths_temp-1): 
+				set_t_inner_t_index=set(t_inner[t_index])
+				for t_index_next in range(t_index+1,len_paths_temp):
+					if set_t_inner_t_index<set(t_inner[t_index_next]) and t_inner[t_index_next].index(t_inner[t_index][-1])-t_inner[t_index_next].index(t_inner[t_index][0])+1==len(t_inner[t_index]):
+						t_junk_index.append(t_index)
+					if set_t_inner_t_index>set(t_inner[t_index_next]) and t_inner[t_index].index(t_inner[t_index_next][-1])-t_inner[t_index].index(t_inner[t_index_next][0])+1==len(t_inner[t_index_next]):
+						t_junk_index.append(t_index_next)
+			paths=[]
+			for path_index in range(len(paths_temp)):
+				if path_index not in t_junk_index:
+					paths.append(paths_temp[path_index])
+			paths=sorted(paths)
+		else:
+			paths=paths_temp
+		
+		if 'a':
+			subpaths=[]
+			for path in paths:
+				junction = []
+				junc_count=[]
+				for exon_index in range(len(path)-1):
+					junc_count.append(dict_junc_count[(path[exon_index][1],path[exon_index+1][0])])
+					junction.append((path[exon_index][1],path[exon_index+1][0]))
+				junc_count_tuple = zip(junction,junc_count) 
+				subpaths.extend(subpaths_highjunccov(path,junc_count_tuple))
+			
+			subpaths_juncavecov=[]
+			for subpath in subpaths:
+				subpath_junccov=0
+				for exon_index in range(len(subpath)-1):
+					subpath_junccov+=dict_junc_count[(subpath[exon_index][1],subpath[exon_index+1][0])]
+				subpaths_juncavecov.append(float(subpath_junccov)/float(len(subpath)-1))
+			
+			if subpaths_juncavecov:
+				subpaths_juncavecov_indextuple=zip(subpaths_juncavecov,range(len(subpaths_juncavecov)))
+				subpaths_juncavecov_indextuple.sort(key = lambda x : x[0])
+				subpaths_cand=[]
+				subpaths_juncavecov_index=zip(*subpaths_juncavecov_indextuple)[1][-1:]
+				for i in subpaths_juncavecov_index:
+					if subpaths[i] not in paths:
+						if subpaths[i][0][0]-gene_left<200:
+							subpaths[i][0]=(subpaths[i][0][0],subpaths[i][0][1])
+						else:
+							if cov_tested:
+								test_cov_list_raw=gene_cov_strand_temp[:subpaths[i][0][0]-gene_left]
+							else:
+								test_cov_list_raw=map(max,zip(*samfile.count_coverage(CHR,gene_left,subpaths[i][0][0],read_callback=check_read)))
+							test_list=range(subpaths[i][0][0]-1,gene_left,-25)
+							test_cov_list_raw.reverse()
+							test_cov_list=test_cov_list_raw[::25]
+							gene_left_sub=subpaths[i][0][0]
+							for j in range(len(test_list)-6):
+								if min(test_cov_list[j:j+3])>=2*max(test_cov_list[j+3:j+6]) and min(test_cov_list[j:j+3])>=50:
+									gene_left_sub=test_list[j+3]
+									base_right=gene_left_sub+25
+									cov_list=test_cov_list_raw[(j+3)*25-25:(j+3)*25+25]
+									min_cov=min(cov_list)
+									gene_left_sub=base_right-cov_list.index(min_cov)+1
+									break
+								elif min(test_cov_list[j:j+3])>=2*max(test_cov_list[j+4:j+7]) and min(test_cov_list[j:j+3])>=50:
+									gene_left_sub=test_list[j+4]
+									base_right=gene_left_sub+25
+									cov_list=test_cov_list_raw[(j+4)*25-25:(j+4)*25+25]
+									min_cov=min(cov_list)
+									gene_left_sub=base_right-cov_list.index(min_cov)+1
+									break
+							subpaths[i][0]=(gene_left_sub,subpaths[i][0][1])
+						if gene_right-subpaths[i][-1][1]<200:
+							subpaths[i][-1]=(subpaths[i][-1][0],subpaths[i][-1][1])
+						else:
+							if cov_tested:
+								test_cov_list_raw=gene_cov_strand_temp[subpaths[i][-1][1]-gene_left:]
+							else:
+								test_cov_list_raw=map(max,zip(*samfile.count_coverage(CHR,subpaths[i][-1][1],gene_right,read_callback=check_read)))
+							test_list=range(subpaths[i][-1][1],gene_right,25)
+							test_cov_list=test_cov_list_raw[::25]
+							gene_right_sub=subpaths[i][-1][1]
+							for j in range(len(test_list)-6):
+								if min(test_cov_list[j:j+3])>=2*max(test_cov_list[j+3:j+6]) and min(test_cov_list[j:j+3])>=50:
+									gene_right_sub=test_list[j+3]
+									base_left=gene_right_sub-25
+									cov_list=test_cov_list_raw[(j+3)*25-25:(j+3)*25+25]
+									min_cov=min(cov_list)
+									gene_right_sub=base_left+cov_list.index(min_cov)
+									break
+								elif min(test_cov_list[j:j+3])>=2*max(test_cov_list[j+4:j+7]) and min(test_cov_list[j:j+3])>=50:
+									gene_right_sub=test_list[j+4]
+									base_left=gene_right_sub-25
+									cov_list=test_cov_list_raw[(j+4)*25-25:(j+4)*25+25]
+									min_cov=min(cov_list)
+									gene_right_sub=base_left+cov_list.index(min_cov)
+									break
+							subpaths[i][-1]=(subpaths[i][-1][0],gene_right_sub)
+						paths.append(subpaths[i])
+		
+
+		if paths:
+			gene_strand.append(paths)
+		
+		
+	
+	
+	gene_edge_strand_left=map(lambda x:x[0],gene_edge_strand)
+	gene_edge_strand_right=map(lambda x:x[1],gene_edge_strand)
+	
+	if gtf_file_name:
+		gene_junc_strand=[]
+		for gene_index in range(len(gene_strand)):
+			gene_junc_strand.append([])
+			for t_index in range(len(gene_strand[gene_index])):
+				gene_junc_strand[gene_index].append([])
+				for exon_index in range(len(gene_strand[gene_index][t_index])-1):
+					gene_junc_strand[gene_index][t_index].append((gene_strand[gene_index][t_index][exon_index][1],gene_strand[gene_index][t_index][exon_index+1][0]))
+		
+		dict_knowntname_exon_strand=gtf_tuple[0]
+		dict_knowntname_innerexonint_strand=gtf_tuple[1]
+		dict_knowntname_junc_strand=gtf_tuple[2]
+		
+		for knowntname in dict_knowntname_innerexonint_strand:
+			knownt_left=dict_knowntname_exon_strand[knowntname][0][0]
+			knownt_right=dict_knowntname_exon_strand[knowntname][-1][-1]
+			gene_junc_strand_temp_left_index=bisect.bisect_left(gene_edge_strand_left,knownt_left)-6
+			if gene_junc_strand_temp_left_index<0:
+				gene_junc_strand_temp_left_index=0
+			gene_junc_strand_temp_right_index=bisect.bisect_right(gene_edge_strand_right,knownt_right)+6
+			gene_junc_strand_temp=gene_junc_strand[gene_junc_strand_temp_left_index:gene_junc_strand_temp_right_index]
+			for gene_index in range(len(gene_junc_strand_temp)):
+				for t_index in range(len(gene_junc_strand_temp[gene_index])):
+					if set(gene_junc_strand_temp[gene_index][t_index])<=dict_knowntname_junc_strand[knowntname]: 
+						relative=[gene_junc_strand_temp_left_index+gene_index,t_index,len(dict_knowntname_junc_strand[knowntname]),len(gene_junc_strand_temp[gene_index][t_index])]
+						knownt_left_exon=dict_knowntname_exon_strand[knowntname][0]
+						gene_strand_t_left_exon=gene_strand[gene_junc_strand_temp_left_index+gene_index][t_index][0]
+						if knownt_left_exon[1] == gene_strand_t_left_exon[1]:
+							left_exon_quotient=float(knownt_left_exon[1]-knownt_left_exon[0])/float(gene_strand_t_left_exon[1]-gene_strand_t_left_exon[0])
+							if 0.2<left_exon_quotient<5 or abs(knownt_left_exon[0]-gene_strand_t_left_exon[0])<500: 
+								if left_exon_quotient>1:
+									left_exon_quotient=1/left_exon_quotient
+								relative.append(left_exon_quotient)
+							else:
+								continue
+						else:
+							relative.append('u')
+						knownt_right_exon=dict_knowntname_exon_strand[knowntname][-1]
+						gene_strand_t_right_exon=gene_strand[gene_junc_strand_temp_left_index+gene_index][t_index][-1]
+						if knownt_right_exon[0] == gene_strand_t_right_exon[0]:
+							right_exon_quotient=float(knownt_right_exon[1]-knownt_right_exon[0])/float(gene_strand_t_right_exon[1]-gene_strand_t_right_exon[0])
+							if 0.2<right_exon_quotient<5 or abs(knownt_right_exon[1]-gene_strand_t_right_exon[1])<500:
+								if right_exon_quotient>1:
+									right_exon_quotient=1/right_exon_quotient
+								relative.append(right_exon_quotient)
+							else:
+								continue
+						else:
+							relative.append('u')
+						dict_knowntname_relative_strand.setdefault(knowntname,[]).append(relative) 
+					elif set(gene_junc_strand_temp[gene_index][t_index])>dict_knowntname_junc_strand[knowntname]:
+						dict_gene_strand_knowntname[tuple(dict_knowntname_exon_strand[knowntname])]=knowntname
+		
+		dict_knowntname_relative_2_strand={}
+		gene_strand_junk_index=[]
+		for knowntname in dict_knowntname_relative_strand:
+			if not (len(dict_knowntname_relative_strand[knowntname])==1 and dict_knowntname_relative_strand[knowntname][0][2]>2 and dict_knowntname_relative_strand[knowntname][0][3]==1):
+				dict_knowntname_relative_2_strand[knowntname]=dict_knowntname_relative_strand[knowntname]
+			else:
+				gene_strand_junk_index.extend(map(lambda x:tuple(x[:2]),dict_knowntname_relative_strand[knowntname]))
+		
+		for knowntname in dict_knowntname_relative_2_strand:
+			if len(dict_knowntname_relative_2_strand[knowntname])>1:
+				pass
+			
+		dict_knowntname_relative_2_strand_keys=dict_knowntname_relative_2_strand.keys()
+		t_junk_index=[]
+		
+		
+		
+		
+		for t_index in range(len(dict_knowntname_relative_2_strand_keys)-1):
+			set_knowntname_t_index=set(map(lambda x:tuple(x[:2]),dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index]]))
+			for t_index_next in range(t_index+1,len(dict_knowntname_relative_2_strand_keys)):
+				if set_knowntname_t_index < set(map(lambda x:tuple(x[:2]),dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index_next]])):
+					t_junk_index.append(t_index)
+				elif set_knowntname_t_index > set(map(lambda x:tuple(x[:2]),dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index_next]])):
+					t_junk_index.append(t_index_next)
+		try:
+			pass
+		except:
+			pass
+		
+		
+		
+		
+		
+		t_equal_index_list=[]
+		for t_index in range(len(dict_knowntname_relative_2_strand_keys)-1):
+			if t_index not in func_iter_nested_list_tuple(t_equal_index_list):
+				set_knowntname_t_index=set(map(lambda x:tuple(x[:2]),dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index]]))
+				t_equal_index=[t_index]
+				for t_index_next in range(t_index+1,len(dict_knowntname_relative_2_strand_keys)):
+					if set_knowntname_t_index == set(map(lambda x:tuple(x[:2]),dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index_next]])):
+						t_equal_index.append(t_index_next)
+				if len(t_equal_index)>1:
+					t_equal_index_list.append(t_equal_index)
+		
+		
+		for t_index_list in t_equal_index_list:
+			t_junc_num=[]
+			t_filter_index_temp=[]
+			for i in t_index_list:
+				t_junc_num.append(dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]][0][2])
+			for i in t_index_list:
+				if min(t_junc_num)==dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]][0][2]:
+					t_filter_index_temp.append(i)
+				else:
+					t_junk_index.append(i)
+			if len(t_filter_index_temp)==1:
+				continue
+			else:
+				t_nonu_num=[]
+				t_filter_index_temp2=[]
+				for i in t_filter_index_temp:
+					t_nonu_num.append(len(filter(lambda x:x!='u',func_iter_nested_list_tuple(map(lambda x:x[4:],dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]])))))
+				for i in t_filter_index_temp:
+					if max(t_nonu_num)==len(filter(lambda x:x!='u',func_iter_nested_list_tuple(map(lambda x:x[4:],dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]])))):
+						t_filter_index_temp2.append(i)
+					else:
+						t_junk_index.append(i)
+				if len(t_filter_index_temp2)==1:
+					continue
+				else:
+					outer_exon_quotient=[]
+					t_filter_index_temp3=[]
+					for i in t_filter_index_temp2:
+						outer_exon_quotient.append(sum(filter(lambda x:x!='u',func_iter_nested_list_tuple(map(lambda x:x[4:],dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]])))))
+					for i in t_filter_index_temp2:
+						if max(outer_exon_quotient)==(filter(lambda x:x!='u',func_iter_nested_list_tuple(map(lambda x:x[4:],dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[i]])))):
+							t_filter_index_temp3.append(i) 
+						else:
+							t_junk_index.append(i)
+					t_junk_index.extend(t_filter_index_temp3[1:])
+		
+		dict_knowntname_relative_2_filter_strand={}
+		for t_index in range(len(dict_knowntname_relative_2_strand_keys)):
+			if t_index not in t_junk_index:
+				dict_knowntname_relative_2_filter_strand[dict_knowntname_relative_2_strand_keys[t_index]]=dict_knowntname_relative_2_strand[dict_knowntname_relative_2_strand_keys[t_index]]
+		
+		dict_gene_strand_gt1index_knowntname={}
+		for knowntname in dict_knowntname_relative_2_filter_strand:
+			dict_gene_strand_gt1index_knowntname[tuple(dict_knowntname_relative_2_filter_strand[knowntname][0][0:2])]=knowntname  
+		for relative in dict_knowntname_relative_2_filter_strand.values():
+			gene_strand_junk_index.extend(map(lambda x:tuple(x[:2]),relative))
+		
+		for gene_index in range(len(gene_strand)):
+			for t_index in range(len(gene_strand[gene_index])):
+				if (gene_index,t_index) in dict_gene_strand_gt1index_knowntname:
+					dict_gene_strand_knowntname[tuple(dict_knowntname_exon_strand[dict_gene_strand_gt1index_knowntname[(gene_index,t_index)]])]=dict_gene_strand_gt1index_knowntname[(gene_index,t_index)]
+				elif (gene_index,t_index) not in gene_strand_junk_index:
+					
+					dict_gene_strand_knowntname[tuple(gene_strand[gene_index][t_index])]=() 
+		
+		
+		for t in dict_gene_strand_knowntname:
+			t_edge_strand.append((t[0][0],t[-1][1]))
+		
+		
+		
+		
+		
+		for knowntname in dict_knowntname_exon_strand:
+			if len(dict_knowntname_exon_strand[knowntname])==1:
+				exon=dict_knowntname_exon_strand[knowntname][0]
+				
+				exon_temp_list=[]
+				exon_expand_range=(exon[1]-exon[0])/10
+				if exon[0]-exon_expand_range<0:
+					exon_raw=(0,exon[1]+exon_expand_range)
+					exon_raw_cov=map(max,zip(*samfile.count_coverage(CHR,0,exon[1]+exon_expand_range,read_callback=check_read)))
+					exon_raw_right=exon[1]+exon_expand_range-1
+					exon_right_temp=i=0
+				else:
+					exon_raw=(exon[0]-exon_expand_range,exon[1]+exon_expand_range)
+					exon_raw_cov=map(max,zip(*samfile.count_coverage(CHR,exon[0]-exon_expand_range,exon[1]+exon_expand_range,read_callback=check_read)))
+					exon_raw_right=exon[1]+2*exon_expand_range-exon[0]-1
+					exon_right_temp=i=0
+				
+				while i<exon_raw_right:
+					i=i+1
+					if exon_raw_cov[i]>0:
+						base_middle_index=i
+						while exon_raw_cov[i]>0 and i>exon_right_temp:
+							i=i-1
+							if i==exon_right_temp:
+								exon_left_temp=i
+								break
+							if exon_raw_cov[i]==0:
+								count=0
+								while exon_raw_cov[i]==0 and i>exon_right_temp and count<50: #
+									i=i-1
+									count+=1
+								if count==50 or i==exon_right_temp:
+									exon_left_temp=i+count+1
+									break
+						
+						
+						i=base_middle_index
+						while exon_raw_cov[i]>0 and i<exon_raw_right:
+							i=i+1
+							if i==exon_raw_right:
+								exon_right_temp=i+1
+								break
+							if exon_raw_cov[i]==0:
+								count=0
+								while exon_raw_cov[i]==0 and i<exon_raw_right and count<50:
+									i=i+1
+									count+=1
+								if count==50 or i==exon_raw_right:
+									exon_right_temp=i-count+1
+									break
+						
+						
+						exon_temp_list.append((exon_raw[0]+exon_left_temp,exon_raw[0]+exon_right_temp))
+				
+				
+				for exon_temp_index in range(len(exon_temp_list)): 
+					if exon_temp_list[exon_temp_index][1]<=exon[0] or exon_temp_list[exon_temp_index][0]>=exon[1]:
+						pass
+					else:
+						
+						count=exon_temp_list[exon_temp_index][0]-exon_raw[0]
+						if count<50:
+							while True:
+								if exon_raw[0]-1000>0:
+									
+									exon_raw2_cov=map(max,zip(*samfile.count_coverage(CHR,exon_raw[0]-1000,exon_raw[0],read_callback=check_read)))
+									exon_raw_cov=exon_raw2_cov+exon_raw_cov
+									exon_raw=(exon_raw[0]-1000,exon_raw[1])
+									for i in range(0,1000)[::-1]:
+										if exon_raw2_cov[i]==0:
+											count+=1
+										else:
+											count=0
+										if count==50:
+											break
+									else:
+										
+										continue
+									exon_temp_list[exon_temp_index]=(exon_temp_list[exon_temp_index][0]-count,exon_temp_list[exon_temp_index][1])
+									break
+								elif exon_raw[0]==0:
+									break
+								else:
+									exon_raw2_cov=map(max,zip(*samfile.count_coverage(CHR,0,exon_raw[0],read_callback=check_read)))
+									exon_raw_cov=exon_raw2_cov+exon_raw_cov
+									exon_raw=(0,exon_raw[1])
+									for i in range(0,exon_raw[0])[::-1]:
+										if exon_raw2_cov[i]==0:
+											count+=1
+										else:
+											count=0
+										if count==50:
+											break
+									else:
+										continue
+									exon_temp_list[exon_temp_index]=(exon_temp_list[exon_temp_index][0]-count,exon_temp_list[exon_temp_index][1])
+									break
+						
+						count=exon_raw[1]-exon_temp_list[exon_temp_index][1]
+						if count<50:
+							while True:
+								exon_raw2_cov=map(max,zip(*samfile.count_coverage(CHR,exon_raw[1],exon_raw[1]+1000,read_callback=check_read)))
+								exon_raw_cov=exon_raw_cov+exon_raw2_cov
+								exon_raw=(exon_raw[0],exon_raw[1]+1000)
+								for i in range(0,1000):
+									if exon_raw2_cov[i]==0:
+										count+=1
+									else:
+										count=0
+									if count==50:
+										
+										break
+								else:
+									
+									continue
+								exon_temp_list[exon_temp_index]=(exon_temp_list[exon_temp_index][0],exon_temp_list[exon_temp_index][1]+count)
+								break
+						
+				
+				if len(exon_temp_list)>1:
+					
+					pass
+				exon_len=exon[1]-exon[0]
+				gtf_flag=0
+				for exon_temp in exon_temp_list:
+					if min(exon[1],exon_temp[1])-max(exon[0],exon_temp[0])>0.2*(max(exon[1],exon_temp[1])-min(exon[0],exon_temp[0])):
+						gtf_flag=1
+						break
+				if gtf_flag==1:
+					for exon_temp in exon_temp_list:
+						if min(exon[1],exon_temp[1])-max(exon[0],exon_temp[0])>0.2*(max(exon[1],exon_temp[1])-min(exon[0],exon_temp[0])):
+							if not dict_gene_strand_knowntname.get((exon,)):
+								dict_gene_strand_knowntname[(exon,)]=knowntname
+								t_edge_strand.append((exon[0],exon[1]))
+						elif exon_temp[1]-exon_temp[0]>100 and (min(exon[1],exon_temp[1])-max(exon[0],exon_temp[0]))<0.5*(exon_temp[1]-exon_temp[0]):
+							for read in samfile.fetch(CHR,exon_temp[0],exon_temp[1]):
+								if read.cigar:
+									if read.has_tag('XS') and read.get_tag('XS')==strand and 3 not in zip(*read.cigar)[0]:
+										if not dict_gene_strand_knowntname.get((exon_temp,)):
+											dict_gene_strand_knowntname[(exon_temp,)]=()
+											t_edge_strand.append((exon_temp[0],exon_temp[1]))
+											break
+				elif gtf_flag==0:
+					for exon_temp in exon_temp_list:
+						if min(exon[1],exon_temp[1])==exon_temp[1] and max(exon[0],exon_temp[0])==exon_temp[0] and exon_temp[1]-exon_temp[0]>100:
+							dict_gene_strand_knowntname[(exon_temp,)]=()
+							t_edge_strand.append((exon_temp[0],exon_temp[1]))
+						elif exon_temp[1]-exon_temp[0]>100:
+							for read in samfile.fetch(CHR,exon_temp[0],exon_temp[1]):
+								if read.cigar:
+									if read.has_tag('XS') and read.get_tag('XS')==strand and 3 not in zip(*read.cigar)[0]:
+										if not dict_gene_strand_knowntname.get((exon_temp,)):
+											dict_gene_strand_knowntname[(exon_temp,)]=()
+											t_edge_strand.append((exon_temp[0],exon_temp[1]))
+											break
+	
+	else:
+		
+		for paths in gene_strand:
+			for t_index in range(len(paths)):
+				dict_gene_strand_knowntname[tuple(paths[t_index])]=()
+	
+	
+	dict_gene_strand_knowntname_1={}
+	for t in dict_gene_strand_knowntname:
+		if len(t)==2 and sum(read_n_count_dict[(t[0][1],t[1][0])][1:5])==1 and (t[0][1]-t[0][0]<50 and t[1][1]-t[1][0]<50) and not dict_gene_strand_knowntname[t]:
+			
+			pass
+		elif len(t)==2 and t[0][1]-t[0][0]+t[1][1]-t[1][0]<200 and t[0][1]-t[0][0]>2 and t[1][1]-t[1][0]>2 and ((map(max,zip(*samfile.count_coverage(CHR,t[0][0]+1,t[0][0]+2,read_callback=check_read)))[0]>=5 and len(set(map(max,zip(*samfile.count_coverage(CHR,t[0][0]+1,min([t[0][1],t[0][0]+30]),read_callback=check_read)))))==1) or (map(max,zip(*samfile.count_coverage(CHR,t[1][1]-2,t[1][1]-1,read_callback=check_read)))[0]>=5 or len(set(map(max,zip(*samfile.count_coverage(CHR,max([t[1][0],t[1][1]-30]),t[1][1]-1,read_callback=check_read)))))==1)):
+			pass
+			
+		else:
+			dict_gene_strand_knowntname_1[t]=dict_gene_strand_knowntname[t]
+	
+	dict_gene_strand_knowntname_temp_big=copy.deepcopy(dict_gene_strand_knowntname_1)
+	exon_strand=set(func_iter_nested_list(map(lambda x:list(x),dict_gene_strand_knowntname_temp_big.keys()))) 
+	
+	
+	
+	
+	
+	dict_left_exon={}
+	dict_right_exon={}
+	for exon in dict_exon_cov_strand.keys():
+		dict_left_exon.setdefault(exon[0],[]).append(exon)
+		dict_right_exon.setdefault(exon[1],[]).append(exon)
+	
+	for left_exon in dict_left_exon:
+		if len(dict_left_exon[left_exon])==1:
+			dict_left_exon[left_exon]=dict_left_exon[left_exon][0]
+		else:
+			exon_range=max(map(lambda x:x[1]-x[0],dict_left_exon[left_exon]))
+			for exon in dict_left_exon[left_exon]:
+				if exon[1]-exon[0]==exon_range:
+					dict_left_exon[left_exon]=exon
+					break
+	
+	for right_exon in dict_right_exon:
+		if len(dict_right_exon[right_exon])==1:
+			dict_right_exon[right_exon]=dict_right_exon[right_exon][0]
+		else:
+			exon_range=max(map(lambda x:x[1]-x[0],dict_right_exon[right_exon]))
+			for exon in dict_right_exon[right_exon]:
+				if exon[1]-exon[0]==exon_range:
+					dict_right_exon[right_exon]=exon
+					break
+	
+	def check_read(read):
+		return read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand)
+	
+	for exon in exon_strand:
+		if dict_exon_cov_strand.get(exon)!=None:
+			if type(dict_exon_cov_strand[exon])==type(1.0):
+				
+				pass
+	
+	
+	
+	for exon in exon_strand:
+		if dict_exon_cov_strand.get(exon)==None:
+			if exon[0] in dict_left_exon:
+				if exon[1]<dict_left_exon[exon[0]][1]:
+					temp_cov_strand=dict_exon_cov_strand[dict_left_exon[exon[0]]][:exon[1]-exon[0]]
+					dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+					dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+				else: 
+					temp_cov_strand=dict_exon_cov_strand[dict_left_exon[exon[0]]]+map(max,zip(*samfile.count_coverage(CHR,dict_left_exon[exon[0]][1],exon[1],read_callback=check_read)))
+					dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+					dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+			elif exon[1] in dict_right_exon:
+				if exon[0]>dict_right_exon[exon[1]][0]:
+					temp_cov_strand=dict_exon_cov_strand[dict_right_exon[exon[1]]][exon[0]-dict_right_exon[exon[1]][0]:]
+					dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+					dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+				else:
+					temp_cov_strand=map(max,zip(*samfile.count_coverage(CHR,exon[0],dict_right_exon[exon[1]][0],read_callback=check_read)))+dict_exon_cov_strand[dict_right_exon[exon[1]]]
+					dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+					dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+			else:
+				temp_cov_strand=map(max,zip(*samfile.count_coverage(CHR,exon[0],exon[1],read_callback=check_read)))
+				dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+				dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+		
+	
+	for exon in dict_exon_cov_strand:
+		if type(dict_exon_cov_strand[exon])==type([1]):
+			temp_cov_strand=dict_exon_cov_strand[exon]
+			dict_exon_cov_strand[exon]=float(sum(temp_cov_strand))/float(exon[1]-exon[0])
+			dict_exon_actual_cov_strand[exon]=sorted(temp_cov_strand)[int((exon[1]-exon[0])*0.9)]
+	
+	
+	
+	if seq_end_type=='paired_end':
+		for exon in exon_strand:
+			read_count=0
+			for read in samfile.fetch(CHR,exon[0],exon[1]):
+				if read.cigar:
+					if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+						read_count+=1/float(read.get_tag('NH'))*0.5
+					elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+						read_count+=1/float(read.get_tag('NH'))
+			dict_exon_count_strand[exon]=read_count
+	elif seq_end_type=='single_end':
+		for exon in exon_strand:
+			read_count=0
+			for read in samfile.fetch(CHR,exon[0],exon[1]):
+				if read.cigar:
+					if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+						read_count+=1/float(read.get_tag('NH'))
+			dict_exon_count_strand[exon]=read_count
+	
+	for paths in gene_strand:
+		dict_junc_t_index={}
+		for t_index in range(len(paths)):
+			if len(paths[t_index])>1:
+				for exon_index in range(len(paths[t_index])-1):
+					dict_junc_t_index.setdefault((paths[t_index][exon_index][1],paths[t_index][exon_index+1][0]),[]).append(t_index)
+		list_dict_junc_t_index_strand.append(dict_junc_t_index)
+
+
+
+		
+def Genetic_algorithm(frag_count_all,list_unknowm_junc_strand,list_dict_exon_strand,strand,dict_gene_strand_knowntname_temp_big,dict_exon_cov_strand,dict_exon_count_strand,dict_exon_actual_cov_strand,samfile_name,CHR,PopulationC,maxEG):
+
+	
+	def sum(fit_value):
+		total = 0
+		for i in range(len(fit_value)):
+			total += fit_value[i]
+		return total
+
+	def juncGA(Y,exon,J,junction):
+		Y_tmp=Y
+		exon_tmp=exon
+		J_tmp=J
+		junction_tmp=junction
+		Y=J
+		exon=junction
+
+		try:	
+			J=[]
+			junction=[]
+			t=[]
+			f=[]
+			h=[]
+			s=[]
+			junc=[]
+			for i in range(len(Y)):
+				t=[]
+				f=[]
+				for j in range(len(exon)):
+					if Y[i][j]==1:  
+						t.append(j)
+					if Y[i][j]==0:  
+						continue
+					if len(t)==2:
+						f.append(t)
+						if t not in s:
+							s.append(t)
+						t=[]
+						t.append(j)
+                
+				h.append(f)
+
+			r=0
+			while(r<len(h)): 
+				m=[]   
+				for i in s:
+					if i in h[r]:              
+						m.append(1)
+					else:
+						m.append(0)
+				r=r+1
+				J.append(m)
+			for i in range(len(s)):
+				junction.append(0)
+
+			pop_size = PopulationC		                  # 种群数量
+			chrom_length =len(dict_gene_strand_knowntname_temp)#染色体长度
+			pc = 0.7			                  # 交配概率
+			pm = 0.05                                 # 变异概率
+			results = [[]]		                  # 存储每一代的最优解，N个二元组
+			fit_value = []		                  # 个体适应度
+			obj_value=[]
+			f_avg_list=[]
+			sigma_list=[]
+			pc_list=[]
+			pm_list=[]
+			R=[]
+			pp=0
+			h=0
+
+			pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)              
+			i=0
+			m=0
+			while(i<maxEG):
+				obj_value,h = calobjValue(pop, chrom_length,exon,Y)        
+				if h == 0:       
+					fit_value = calfitValue(obj_value,pop,junction,J,chrom_length)                           
+					best_individual,best_fit = best(pop, fit_value)		
+					results.append([best_fit, best_individual])
+					total_fit = sum(fit_value)
+					if total_fit!=0:
+						selection(pop,fit_value)						                                                                  
+						crossover(pop,fit_value,pc,pm,i,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R)							      
+						i=i+1
+					if total_fit==0:
+						pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)
+					
+				if h != 0:
+					results.append([obj_value[-1], pop[h]])
+					break
+			if results:
+				results = results[1:]   
+    				results.sort()
+				for i in range(len(results[-1][1])):
+					results[-1][1][i]='%.2f'%results[-1][1][i] 
+					results[-1][1][i]=float(results[-1][1][i])
+				junc=results[-1][1]
+						
+		except:
+			junc=[]
+
+		if not junc:
+			J=J_tmp
+			junction=junction_tmp
+			J_test=[]
+			for i in range(len(junction)):
+				hss=[]
+				for j in range(len(J)):
+					if J[j][i]==1:
+						hss.append(j)
+				J_test.append(hss)
+
+			junc=[]
+			for i in range(len(J)):	
+				r=[]	
+				for j in range(len(J_test)):
+					if len(J_test[j])==1 and i==J_test[j][0]:
+						r.append(junction[j])
+				if r:
+					total_r=0
+					for k in r:
+						total_r=total_r+k
+					jun=total_r/len(r)
+					junc.append(jun)
+				else:
+					junc.append(-1)
+				
+
+			for i in range(len(junc)):
+				if junc[i]==-1:
+					t=[]
+					s=0
+					for j in J_test:
+						if i in j and len(j)==2:
+							for k in j:
+								if junc[k]>0 and junction[s]-junc[k]>0:
+									t.append(junction[s]-junc[k])	
+						s=s+1
+					if t:
+						total_r=0
+						for l in t:
+							total_r=total_r+l
+						junc[i]=total_r/len(t)	
+		Y=Y_tmp
+		exon=exon_tmp
+		J=J_tmp
+		junction=junction_tmp			
+		
+
+		return junc
+
+
+	def statGA(frag_count_all,list_unknowm_junc_strand,list_dict_exon_strand,strand,dict_gene_strand_knowntname_temp,dict_exon_cov_strand,dict_exon_count_strand,dict_exon_actual_cov_strand,samfile_name,CHR):
+		
+
+		samfile = pysam.AlignmentFile(samfile_name,'rb')
+		if strand=='-':
+			reverse_strand='+'
+		if strand=='+':
+			reverse_strand='-'
+		Y=[]
+		exon=[]
+		J = []
+		junction=[]
+		dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+		exon_sorted=[]
+		for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+			for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+				if dict_gene_strand_knowntname_temp_keys[i][j] not in exon_sorted:
+					exon_sorted.append(dict_gene_strand_knowntname_temp_keys[i][j])
+				else:
+					pass
+		exon_sorted=sorted(exon_sorted)
+		
+			
+
+		for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+			t_array=[]
+			for j in range(len(exon_sorted)):
+				if exon_sorted[j] not in dict_gene_strand_knowntname_temp_keys[i]:
+					t_array.append(0)
+				else:
+					t_array.append(1)
+			Y.append(t_array)
+
+		exons=[]
+		if seq_end_type=='paired_end':
+			for i in exon_sorted:
+				read_total=0
+				for read in samfile.fetch(CHR,i[0],i[1]):
+					if read.cigar:
+						if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+							read_total+=1/float(read.get_tag('NH'))*0.5
+						elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+							read_total+=1/float(read.get_tag('NH'))
+				exon.append(read_total/(i[1]-i[0])*1000)
+				exons.append(read_total)
+		elif seq_end_type=='single_end':
+			for i in exon_sorted:
+				read_total=0
+				for read in samfile.fetch(CHR,i[0],i[1]):
+					if read.cigar:
+						if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):			
+							read_total+=1/float(read.get_tag('NH'))
+				exon.append(read_total/(i[1]-i[0])*1000)
+				exons.append(read_total)
+		
+		
+		junction_sorted=[]
+		
+
+		for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+			for j in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):	
+				if(dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]) not in junction_sorted:
+					junction_sorted.append((dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]))		
+				else:
+					pass
+
+		for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+			j_array=[]
+			for j in range(len(junction_sorted)):
+				h=0
+				for k in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):
+					if junction_sorted[j][0]==dict_gene_strand_knowntname_temp_keys[i][k][1] and junction_sorted[j][1]==dict_gene_strand_knowntname_temp_keys[i][k+1][0]:
+						h=h+1
+				if h==0:
+					j_array.append(0)
+				else:
+					j_array.append(1)
+			J.append(j_array)
+		
+		dict_junc_realcount_key=dict_junc_realcount.keys()
+
+		for i in junction_sorted:
+			if i in dict_junc_realcount_key:
+				junction.append(dict_junc_realcount[i])
+			else:
+				junction.append(0)
+
+
+
+		if len(dict_gene_strand_knowntname_temp)==1:
+			gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]
+			dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]=[]			
+			dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(gtf_anno)
+			xxx=xxx+1
+			exon_cov=[]
+			t_cov=0
+
+			total_sum=0	
+			for i in exons:
+				total_sum=total_sum+i
+
+			for i in junction:
+				total_sum=total_sum-i
+
+			
+			total_len=0
+			for i in exon_sorted:
+				total_len=total_len+(i[1]-i[0])
+
+			dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(total_sum/total_len*1000)
+
+
+			dict_exon_cov_strand_keys=[]
+			dict_exon_cov_strand_keys=dict_exon_cov_strand.keys()			
+			for i in exon_sorted:
+				if i not in dict_exon_cov_strand_keys:
+					exon_cov.append(0)
+				else:
+					exon_cov.append(dict_exon_cov_strand[i])
+			
+
+			t_len=0
+			sum_t_cov=0
+			for j in range(len(exon_sorted)):
+				t_len+=(exon_sorted[j][1]-exon_sorted[j][0])
+				sum_t_cov+=exon_cov[j]*(exon_sorted[j][1]-exon_sorted[j][0])
+			t_cov=sum_t_cov/t_len
+
+			dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(t_cov)
+			dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(exon_cov)
+			
+							
+						
+		if len(dict_gene_strand_knowntname_temp) !=1:
+			junc=juncGA(Y,exon,J,junction)										
+			Y_test=[]
+			for i in range(len(exon)):
+				hss=[]
+				for j in range(len(Y)):
+					if Y[j][i]==1:
+						hss.append(j)
+				Y_test.append(hss)
+			l=0
+			for i in junc:
+				if i<0:
+					l=l+1
+			if l==0:
+				p=[]
+				q=[]
+				for m in range(len(Y_test)):	
+					if len(Y_test[m])==1 and Y_test[m][0] not in p:
+						k=Y_test[m][0]
+						p.append(k)
+						total=0
+						exon_num=0
+						for i in range(len(exon)):
+							if Y[k][i]==1:
+								exon_num=exon_num+1
+							tes=0
+							for j in range(len(Y)):
+								tes=tes+Y[j][i]*junc[j]
+							total=total+exon[i]*(junc[k]/tes*Y[k][i])
+						for r in range(len(Y_test)):
+							if len(Y_test[r])==1 and Y_test[r]==Y_test[m]:
+								exon[r]=total/exon_num
+						
+
+			pop_size = PopulationC		                  # 种群数量
+			chrom_length =len(dict_gene_strand_knowntname_temp)#染色体长度
+			pc = 0.7			                  # 交配概率
+			pm = 0.05                                 # 变异概率
+			results = [[]]		                  # 存储每一代的最优解，N个二元组
+			fit_value = []		                  # 个体适应度
+			obj_value=[]
+			f_avg_list=[]
+			sigma_list=[]
+			pc_list=[]
+			pm_list=[]
+			R=[]
+			pp=0
+				
+			pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)              
+			i=0
+			m=0
+			while(i<maxEG):
+				obj_value,h = calobjValue(pop, chrom_length,exon,Y)        
+				if h == 0:       
+					fit_value = calfitValue(obj_value,pop,junction,J,chrom_length)                           
+					best_individual,best_fit = best(pop, fit_value)		
+					results.append([best_fit, best_individual])
+					total_fit = 0
+					for phd in range(len(fit_value)):
+						total_fit += fit_value[phd]
+					if total_fit!=0:
+						selection(pop,fit_value)	                                                                  
+						crossover(pop,fit_value,pc,pm,i,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R)								      
+						i=i+1
+					if total_fit==0:
+						pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)
+						m=m+1
+						if m>30:
+							break						
+				if h != 0:
+					results.append([obj_value[-1], pop[h]])
+					i=100
+					break
+		
+			if i<100:
+				dict_gene_strand_knowntname_temp={}
+			else:
+				results = results[1:]
+				results.sort()
+				
+				p=0
+				q=0
+				for i in range(len(junc)):
+					if junc[i]>p:
+						p=junc[i]
+						q=i
+				if p>0 and results[-1][1][q]>0:
+					for i in range(len(junc)):
+						if junc[i]>0 and results[-1][1][i]>0:
+							results[-1][1][i]=results[-1][1][q]*(junc[i]/junc[q])
+	
+				
+
+				sum_fpkm=0
+				total_fpkm=[]					
+				for i in range(len(junction)):
+					sum_fpkm=0
+					for j in range(len(J)):
+						if J[j][i]==1:
+							sum_fpkm=sum_fpkm+float(results[-1][1][j])
+					total_fpkm.append(sum_fpkm)
+
+
+
+				total_sum=0
+				total_len=0
+				len_t=0
+				t_fpkm=[]
+				junc_remove=0
+				for i in range(len(Y)):
+					total_sum=0
+					total_len=0
+					len_t=0
+					junc_remove=0
+					for j in range(len(Y[i])):
+						if Y[i][j]==1:
+							len_t=(exon_sorted[j][1]-exon_sorted[j][0])
+							total_sum=total_sum+len_t*float(results[-1][1][i])/1000
+							total_len=total_len+len_t
+						
+							
+					t_fpkm.append(total_sum/total_len*1000)
+	
+				
+
+
+				for i in range(len(t_fpkm)):
+					
+					gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]
+					
+					dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]=[]
+						
+					dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(gtf_anno)
+					
+					dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_fpkm[i])
+					
+				sum_fpkm=0
+				total_fpkm=[]
+				t_exon_cov=[]
+				exon_cov=[]
+				t_cov=[]
+				for i in range(len(exon_sorted)):
+					sum_fpkm=0
+					for j in range(len(results[-1][1])):
+						if Y[j][i]==1:
+							sum_fpkm=sum_fpkm+float(results[-1][1][j])
+					total_fpkm.append(sum_fpkm)	
+
+				dict_exon_total_fpkm={}
+				for i in range(len(exon_sorted)):
+					dict_exon_total_fpkm[exon_sorted[i]]=total_fpkm[i]
+
+					
+
+				for i in range(len(results[-1][1])):
+					t_exon_cov=[]
+					for j in dict_gene_strand_knowntname_temp_keys[i]:
+						if j in dict_exon_cov_strand.keys():
+							ratio=float(results[-1][1][i])/dict_exon_total_fpkm[j]
+							t_exon_cov.append(float(dict_exon_cov_strand[j])*ratio)
+						else:
+							t_exon_cov.append(0)
+
+					exon_cov.append(t_exon_cov)			
+				
+	
+				for i in range(len(results[-1][1])):
+					t_len=0
+					sum_t_cov=0
+					for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+						t_len+=dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0]
+						sum_t_cov+=exon_cov[i][j]*(dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0])
+					t_cov.append(sum_t_cov/t_len)
+
+					
+				
+				for i in range(len(results[-1][1])):
+					dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_cov[i])
+					dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(exon_cov[i])
+				
+		return dict_gene_strand_knowntname_temp
+					
+
+#############################################################################################################################################################################################################
+
+	samfile = pysam.AlignmentFile(samfile_name,'rb')
+	if strand=='-':
+		reverse_strand='+'
+	if strand=='+':
+		reverse_strand='-'
+	
+	
+	list_dict_gene_strand_knowntname=[]
+
+	if dict_gene_strand_knowntname_temp_big:
+		list_dict_gene_strand_knowntname_temp=[{((-2,-1),):()}]
+		dict_gene_strand_knowntname_temp_big_keys=sorted(dict_gene_strand_knowntname_temp_big.keys())
+
+		for t in dict_gene_strand_knowntname_temp_big_keys:
+			if t[0][0]<max(map(lambda x:x[-1][-1], list_dict_gene_strand_knowntname_temp[-1].keys())):
+				list_dict_gene_strand_knowntname_temp[-1][t]=dict_gene_strand_knowntname_temp_big[t]
+			else:
+				list_dict_gene_strand_knowntname_temp.append({})
+				list_dict_gene_strand_knowntname_temp[-1][t]=dict_gene_strand_knowntname_temp_big[t]
+	
+		del list_dict_gene_strand_knowntname_temp[0]
+##############################################################################################################################################
+
+		list_double=[]
+		list_single=[]
+		list_quapra=[]
+		list_cem=[]
+		for dict_gene_strand_knowntname_temp in list_dict_gene_strand_knowntname_temp:
+			dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+			for i in dict_gene_strand_knowntname_temp_keys:
+				list_quapra.append(i)
+
+		for dict_gene_strand_knowntname_temp in list_dict_exon_strand:
+			dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+			for i in dict_gene_strand_knowntname_temp_keys:
+				list_cem.append(i)
+		for i in list_quapra:
+			if i in list_cem:
+				list_double.append(i)
+			else:
+				list_single.append(i)
+
+		for i in list_cem:
+			if i not in list_double:
+				list_single.append(i)
+
+
+################################################################################################################################################
+
+		list_dict_gene_strand_knowntname_temp_tmp=[]
+		for dict_gene_strand_knowntname_temp in list_dict_gene_strand_knowntname_temp:
+		
+			dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+			ssh=0
+			list_annotion=[]
+			for i in dict_gene_strand_knowntname_temp_keys:
+				if dict_gene_strand_knowntname_temp[i]:
+					annotion=dict_gene_strand_knowntname_temp[i][0]
+					if annotion not in list_annotion:
+						list_annotion.append(annotion)
+					ssh=1
+		
+			if ssh==1:	
+				for j in list_annotion:				
+					for dict_cem in list_dict_exon_strand:
+						k=0
+						dict_cem_keys=sorted(dict_cem.keys())					
+						for i in dict_cem_keys:
+							if j==dict_cem[i][0]:							
+								k=1
+								if i not in dict_gene_strand_knowntname_temp_keys:										
+									dict_gene_strand_knowntname_temp[i]=dict_cem[i]	
+						if k==1:
+							list_dict_exon_strand.remove(dict_cem)
+							break				
+				list_dict_gene_strand_knowntname_temp_tmp.append(dict_gene_strand_knowntname_temp)
+
+			if ssh==0:
+				list_dict_gene_strand_knowntname_temp_tmp.append(dict_gene_strand_knowntname_temp)
+				continue
+
+		for temp in	list_dict_exon_strand:
+			list_dict_gene_strand_knowntname_temp_tmp.append(temp)
+
+		list_dict_gene_strand_knowntname_temp=[]
+		for i in list_dict_gene_strand_knowntname_temp_tmp:
+			if i not in list_dict_gene_strand_knowntname_temp:
+				list_dict_gene_strand_knowntname_temp.append(i)
+
+	else:
+		list_dict_gene_strand_knowntname_temp=[]
+		list_dict_gene_strand_knowntname_temp=copy.deepcopy(list_dict_exon_strand)
+	
+	ji_shu=0
+#######################################################################################################################################################
+	for dict_gene_strand_knowntname_temp in list_dict_gene_strand_knowntname_temp:
+		if dict_gene_strand_knowntname_temp_big:				
+			dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+			for i in dict_gene_strand_knowntname_temp_keys:
+
+				if not dict_gene_strand_knowntname_temp[i]:
+					unknown_junc=[]
+					if len(i)>1:
+						for j in range(len(i)-1): 
+							unknown_junc.append((i[j][1],i[j+1][0]))
+						unknown_junc=tuple(unknown_junc)
+						if unknown_junc not in list_unknowm_junc_strand:
+							del dict_gene_strand_knowntname_temp[i]						
+			
+			if not dict_gene_strand_knowntname_temp:
+				continue
+		ji_shu=ji_shu+1
+		
+		if(len(dict_gene_strand_knowntname_temp)>10 and dict_gene_strand_knowntname_temp_keys[0]>50):
+			continue
+	
+		try:
+			
+			Y=[]
+			exon=[]
+			J = []
+			junction=[]
+			xxx=0
+			dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+			for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+				if len(dict_gene_strand_knowntname_temp_keys[i])==1:
+					xxx=xxx+1
+				else:
+					pass
+			if xxx==len(dict_gene_strand_knowntname_temp_keys):
+				continue
+
+			exon_sorted=[]
+			for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+				for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+					if dict_gene_strand_knowntname_temp_keys[i][j] not in exon_sorted:
+						exon_sorted.append(dict_gene_strand_knowntname_temp_keys[i][j])
+					else:
+						pass
+			exon_sorted=sorted(exon_sorted)
+		
+			
+
+			for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+				t_array=[]
+				for j in range(len(exon_sorted)):
+					if exon_sorted[j] not in dict_gene_strand_knowntname_temp_keys[i]:
+						t_array.append(0)
+					else:
+						t_array.append(1)
+				Y.append(t_array)
+
+				
+			exons=[]
+			if seq_end_type=='paired_end':
+				for i in exon_sorted:
+					read_total=0
+					for read in samfile.fetch(CHR,i[0],i[1]):
+						if read.cigar:
+							if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+								
+								read_total+=1/float(read.get_tag('NH'))*0.5
+							elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+								
+								read_total+=1/float(read.get_tag('NH'))
+					exons.append(read_total)
+					exon.append(read_total/(i[1]-i[0])*1000)
+
+			elif seq_end_type=='single_end':
+				for i in exon_sorted:
+					read_total=0
+					for read in samfile.fetch(CHR,i[0],i[1]):
+						if read.cigar:
+							if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):						
+													
+								read_total+=1/float(read.get_tag('NH'))
+					exons.append(read_total)
+					exon.append(read_total/(i[1]-i[0])*1000)
+		
+			junction_sorted=[]
+		
+
+			for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+				for j in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):	
+					if(dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]) not in junction_sorted:
+						junction_sorted.append((dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]))		
+					else:
+						pass
+		
+			for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+				j_array=[]
+				for j in range(len(junction_sorted)):
+					h=0
+					for k in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):
+						if junction_sorted[j][0]==dict_gene_strand_knowntname_temp_keys[i][k][1] and junction_sorted[j][1]==dict_gene_strand_knowntname_temp_keys[i][k+1][0]:
+							h=h+1
+					if h==0:
+						j_array.append(0)
+					else:
+						j_array.append(1)
+				J.append(j_array)
+		
+			dict_junc_realcount_key=dict_junc_realcount.keys()
+
+			for i in junction_sorted:
+				if i in dict_junc_realcount_key:
+					junction.append(dict_junc_realcount[i])
+				else:
+					junction.append(0)
+
+			if len(dict_gene_strand_knowntname_temp)==1:
+				gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]
+				dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]=[]			
+				dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(gtf_anno)
+				xxx=xxx+1
+				exon_cov=[]
+				t_cov=0
+
+				total_sum=0	
+				for i in exons:
+					total_sum=total_sum+i
+
+				for i in junction:
+					total_sum=total_sum-i
+
+			
+				total_len=0
+				for i in exon_sorted:
+					total_len=total_len+(i[1]-i[0])
+
+				dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(total_sum/total_len*1000)
+
+
+				dict_exon_cov_strand_keys=[]
+				dict_exon_cov_strand_keys=dict_exon_cov_strand.keys()			
+				for i in exon_sorted:
+					if i not in dict_exon_cov_strand_keys:
+						exon_cov.append(0)
+					else:
+						exon_cov.append(dict_exon_cov_strand[i])
+			
+
+				t_len=0
+				sum_t_cov=0
+				for j in range(len(exon_sorted)):
+					t_len+=(exon_sorted[j][1]-exon_sorted[j][0])
+					sum_t_cov+=exon_cov[j]*(exon_sorted[j][1]-exon_sorted[j][0])
+				t_cov=sum_t_cov/t_len
+
+				dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(t_cov)
+				dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(exon_cov)
+		
+			if len(dict_gene_strand_knowntname_temp) !=1:
+				Y_test=[]
+				for i in range(len(exon)):
+					hss=[]
+					for j in range(len(Y)):
+						if Y[j][i]==1:
+							hss.append(j)
+					Y_test.append(hss)
+	
+				single=[]
+				many=[]
+				single_tans=[]
+				for i in Y_test:
+					if len(i)==1:
+						if i[0] not in single:
+							single.append(i[0])
+					if len(i)>1:
+						for j in i:
+							if j not in many:
+								many.append(j)
+				if single:
+					for i in single:
+						if i not in many:
+							single_tans.append(i)
+
+				if single_tans:
+					dict_single=dict_gene_strand_knowntname_temp
+					dict_single_keys=dict_gene_strand_knowntname_temp_keys					
+					dict_gene={}
+					for i in single_tans:
+						dict_gene_strand_knowntname_temp={}
+						f=dict_single_keys[i]
+						dict_gene_strand_knowntname_temp[f]=dict_single[f]	
+											
+						xxx=0
+						dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							if len(dict_gene_strand_knowntname_temp_keys[i])==1:
+								xxx=xxx+1
+							else:
+								pass
+						if xxx==len(dict_gene_strand_knowntname_temp_keys):
+							exons=[]
+							exon_sorted=[]
+							dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+							exon_sorted.append(dict_gene_strand_knowntname_temp_keys[0][0])
+							
+							if seq_end_type=='paired_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))*0.5
+											elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))
+									
+									exons.append(read_total)
+							elif seq_end_type=='single_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):							
+												read_total+=1/float(read.get_tag('NH'))							
+									exons.append(read_total)
+							
+
+							if len(dict_gene_strand_knowntname_temp)==1:
+								gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]=[]			
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(gtf_anno)
+								
+								exon_cov=[]
+								t_cov=0
+
+								total_sum=0	
+								for i in exons:
+									total_sum=total_sum+i
+
+							
+
+			
+								total_len=0
+								for i in exon_sorted:
+									total_len=total_len+(i[1]-i[0])
+
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(total_sum/total_len*1000)
+
+
+								dict_exon_cov_strand_keys=[]
+								dict_exon_cov_strand_keys=dict_exon_cov_strand.keys()			
+								for i in exon_sorted:
+									if i not in dict_exon_cov_strand_keys:
+										exon_cov.append(0)
+									else:
+										exon_cov.append(dict_exon_cov_strand[i])
+			
+
+								t_len=0
+								sum_t_cov=0
+								for j in range(len(exon_sorted)):
+									t_len+=(exon_sorted[j][1]-exon_sorted[j][0])
+									sum_t_cov+=exon_cov[j]*(exon_sorted[j][1]-exon_sorted[j][0])
+								t_cov=sum_t_cov/t_len
+
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(t_cov)
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(exon_cov)
+								
+								dict_gene.update(dict_gene_strand_knowntname_temp)
+								
+
+						else:
+							Y=[]
+							exon=[]
+							J = []
+							junction=[]
+							dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+							exon_sorted=[]
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+									if dict_gene_strand_knowntname_temp_keys[i][j] not in exon_sorted:
+										exon_sorted.append(dict_gene_strand_knowntname_temp_keys[i][j])
+									else:
+										pass
+							exon_sorted=sorted(exon_sorted)
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								t_array=[]
+								for j in range(len(exon_sorted)):
+									if exon_sorted[j] not in dict_gene_strand_knowntname_temp_keys[i]:
+										t_array.append(0)
+									else:
+										t_array.append(1)
+								Y.append(t_array)
+
+							exons=[]
+							if seq_end_type=='paired_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))*0.5
+											elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))
+									exon.append(read_total/(i[1]-i[0])*1000)
+									exons.append(read_total)
+							elif seq_end_type=='single_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):			
+
+																	
+												read_total+=1/float(read.get_tag('NH'))
+									exon.append(read_total/(i[1]-i[0])*1000)
+									exons.append(read_total)
+		
+		
+							junction_sorted=[]
+		
+
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								for j in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):	
+									if(dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]) not in junction_sorted:
+										junction_sorted.append((dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]))		
+									else:
+										pass
+
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								j_array=[]
+								for j in range(len(junction_sorted)):
+									h=0
+									for k in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):
+										if junction_sorted[j][0]==dict_gene_strand_knowntname_temp_keys[i][k][1] and junction_sorted[j][1]==dict_gene_strand_knowntname_temp_keys[i][k+1][0]:
+											h=h+1
+									if h==0:
+										j_array.append(0)
+									else:
+										j_array.append(1)
+								J.append(j_array)
+		
+							dict_junc_realcount_key=dict_junc_realcount.keys()
+
+							for i in junction_sorted:
+								if i in dict_junc_realcount_key:
+									junction.append(dict_junc_realcount[i])
+								else:
+									junction.append(0)
+
+							if len(dict_gene_strand_knowntname_temp)==1:
+								gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]=[]			
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(gtf_anno)
+								
+								exon_cov=[]
+								t_cov=0
+
+								total_sum=0	
+								for i in exons:
+									total_sum=total_sum+i
+
+								for i in junction:
+									total_sum=total_sum-i
+
+			
+								total_len=0
+								for i in exon_sorted:
+									total_len=total_len+(i[1]-i[0])
+
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(total_sum/total_len*1000)
+
+
+								dict_exon_cov_strand_keys=[]
+								dict_exon_cov_strand_keys=dict_exon_cov_strand.keys()			
+								for i in exon_sorted:
+									if i not in dict_exon_cov_strand_keys:
+										exon_cov.append(0)
+									else:
+										exon_cov.append(dict_exon_cov_strand[i])
+			
+
+								t_len=0
+								sum_t_cov=0
+								for j in range(len(exon_sorted)):
+									t_len+=(exon_sorted[j][1]-exon_sorted[j][0])
+									sum_t_cov+=exon_cov[j]*(exon_sorted[j][1]-exon_sorted[j][0])
+								t_cov=sum_t_cov/t_len
+
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(t_cov)
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(exon_cov)
+								
+								
+								dict_gene.update(dict_gene_strand_knowntname_temp)
+												
+							
+
+					dict_gene_strand_knowntname_temp=dict_single
+					dict_gene_strand_knowntname_temp_keys=dict_single_keys
+
+					for i in single_tans:
+						f=dict_gene_strand_knowntname_temp_keys[i]
+						del dict_gene_strand_knowntname_temp[f]
+				
+					if dict_gene_strand_knowntname_temp:
+						
+						xxx=0
+						dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							if len(dict_gene_strand_knowntname_temp_keys[i])==1:
+								xxx=xxx+1
+							else:
+								pass
+						if xxx==len(dict_gene_strand_knowntname_temp_keys):
+							pass
+						else:
+							Y=[]
+							exon=[]
+							J = []
+							junction=[]
+							dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+							exon_sorted=[]
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+									if dict_gene_strand_knowntname_temp_keys[i][j] not in exon_sorted:
+										exon_sorted.append(dict_gene_strand_knowntname_temp_keys[i][j])
+									else:
+										pass
+							exon_sorted=sorted(exon_sorted)
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								t_array=[]
+								for j in range(len(exon_sorted)):
+									if exon_sorted[j] not in dict_gene_strand_knowntname_temp_keys[i]:
+										t_array.append(0)
+									else:
+										t_array.append(1)
+								Y.append(t_array)
+
+							exons=[]
+							if seq_end_type=='paired_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))*0.5
+											elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+												
+												read_total+=1/float(read.get_tag('NH'))
+									exon.append(read_total/(i[1]-i[0])*1000)
+									exons.append(read_total)
+							elif seq_end_type=='single_end':
+								for i in exon_sorted:
+									read_total=0
+									for read in samfile.fetch(CHR,i[0],i[1]):
+										if read.cigar:
+											if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):			
+
+																
+												read_total+=1/float(read.get_tag('NH'))
+									exon.append(read_total/(i[1]-i[0])*1000)
+									exons.append(read_total)
+		
+		
+							junction_sorted=[]
+		
+
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								for j in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):	
+									if(dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]) not in junction_sorted:
+										junction_sorted.append((dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]))		
+									else:
+										pass
+
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								j_array=[]
+								for j in range(len(junction_sorted)):
+									h=0
+									for k in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):
+										if junction_sorted[j][0]==dict_gene_strand_knowntname_temp_keys[i][k][1] and junction_sorted[j][1]==dict_gene_strand_knowntname_temp_keys[i][k+1][0]:
+											h=h+1
+									if h==0:
+										j_array.append(0)
+									else:
+										j_array.append(1)
+								J.append(j_array)
+		
+							dict_junc_realcount_key=dict_junc_realcount.keys()
+
+							for i in junction_sorted:
+								if i in dict_junc_realcount_key:
+									junction.append(dict_junc_realcount[i])
+								else:
+									junction.append(0)
+
+
+							if len(dict_gene_strand_knowntname_temp) !=1:
+						
+
+								junc=juncGA(Y,exon,J,junction)						
+														
+								Y_test=[]
+								for i in range(len(exon)):
+									hss=[]
+									for j in range(len(Y)):
+										if Y[j][i]==1:
+											hss.append(j)
+									Y_test.append(hss)
+
+								l=0
+								for i in junc:
+									if i<0:
+										l=l+1
+								if l==0:
+									
+									p=[]
+									q=[]
+									for m in range(len(Y_test)):	
+										if len(Y_test[m])==1 and Y_test[m][0] not in p:
+											k=Y_test[m][0]
+											
+											p.append(k)
+											total=0
+											exon_num=0
+											for i in range(len(exon)):
+												if Y[k][i]==1:
+													exon_num=exon_num+1
+												tes=0
+												for j in range(len(Y)):
+													tes=tes+Y[j][i]*junc[j]
+												
+												total=total+exon[i]*(junc[k]/tes*Y[k][i])
+											
+											for r in range(len(Y_test)):
+												if len(Y_test[r])==1 and Y_test[r]==Y_test[m]:
+													exon[r]=total/exon_num
+
+
+
+								
+						
+
+								pop_size = PopulationC		                  # 种群数量
+								chrom_length =len(dict_gene_strand_knowntname_temp)#染色体长度
+								pc = 0.7			                  # 交配概率
+								pm = 0.05                                 # 变异概率
+								results = [[]]		                  # 存储每一代的最优解，N个二元组
+								fit_value = []		                  # 个体适应度
+								obj_value=[]
+								f_avg_list=[]
+								sigma_list=[]
+								pc_list=[]
+								pm_list=[]
+								R=[]
+								pp=0
+				
+								pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)              
+								i=0
+								m=0
+								while(i<maxEG):
+									obj_value,h = calobjValue(pop, chrom_length,exon,Y)        
+									if h == 0:       
+										fit_value = calfitValue(obj_value,pop,junction,J,chrom_length)                           
+										best_individual,best_fit = best(pop, fit_value)		
+										results.append([best_fit, best_individual])
+										total_fit = 0
+										for phd in range(len(fit_value)):
+											total_fit += fit_value[phd]
+										if total_fit!=0:
+											selection(pop,fit_value)
+											                                                               
+											crossover(pop,fit_value,pc,pm,i,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R)
+																		      
+											i=i+1
+										if total_fit==0:
+											pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)
+											m=m+1
+											if m>30:
+												break						
+									if h != 0:
+										results.append([obj_value[-1], pop[h]])
+										i=100
+										break
+		
+								if i<100:
+								
+									dict_gene_strand_knowntname_temp={}
+								else:
+									
+									results = results[1:]
+									results.sort()
+									
+									p=0
+									q=0
+									for i in range(len(junc)):
+										if junc[i]>p:
+											p=junc[i]
+											q=i
+									if p>0 and results[-1][1][q]>0:
+										for i in range(len(junc)):
+											if junc[i]>0 and results[-1][1][i]>0:
+												results[-1][1][i]=results[-1][1][q]*(junc[i]/junc[q])
+
+									sum_fpkm=0
+									total_fpkm=[]					
+									for i in range(len(junction)):
+										sum_fpkm=0
+										for j in range(len(J)):
+											if J[j][i]==1:
+												sum_fpkm=sum_fpkm+float(results[-1][1][j])
+										total_fpkm.append(sum_fpkm)
+
+
+
+									total_sum=0
+									total_len=0
+									len_t=0
+									t_fpkm=[]
+									junc_remove=0
+									for i in range(len(Y)):
+										total_sum=0
+										total_len=0
+										len_t=0
+										junc_remove=0
+										for j in range(len(Y[i])):
+											if Y[i][j]==1:
+												len_t=(exon_sorted[j][1]-exon_sorted[j][0])
+												total_sum=total_sum+len_t*float(results[-1][1][i])/1000
+												total_len=total_len+len_t
+						
+										t_fpkm.append(total_sum/total_len*1000)
+	
+								
+
+
+									for i in range(len(t_fpkm)):
+					
+										gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]
+									
+					
+										dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]=[]
+						
+										dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(gtf_anno)
+					
+										dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_fpkm[i])
+
+
+					
+									sum_fpkm=0
+									total_fpkm=[]
+									t_exon_cov=[]
+									exon_cov=[]
+									t_cov=[]
+									for i in range(len(exon_sorted)):
+										sum_fpkm=0
+										for j in range(len(results[-1][1])):
+											if Y[j][i]==1:
+												sum_fpkm=sum_fpkm+float(results[-1][1][j])
+										total_fpkm.append(sum_fpkm)
+					
+	
+
+									dict_exon_total_fpkm={}
+									for i in range(len(exon_sorted)):
+										dict_exon_total_fpkm[exon_sorted[i]]=total_fpkm[i]
+
+					
+
+									for i in range(len(results[-1][1])):
+										t_exon_cov=[]
+										for j in dict_gene_strand_knowntname_temp_keys[i]:
+											if j in dict_exon_cov_strand.keys():
+												ratio=float(results[-1][1][i])/dict_exon_total_fpkm[j]
+												t_exon_cov.append(float(dict_exon_cov_strand[j])*ratio)
+											else:
+												t_exon_cov.append(0)
+
+										exon_cov.append(t_exon_cov)			
+				
+	
+									for i in range(len(results[-1][1])):
+										t_len=0
+										sum_t_cov=0
+										for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+											t_len+=dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0]
+											sum_t_cov+=exon_cov[i][j]*(dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0])
+										t_cov.append(sum_t_cov/t_len)
+
+					
+				
+									for i in range(len(results[-1][1])):
+										dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_cov[i])
+										dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(exon_cov[i])
+									
+									dict_gene.update(dict_gene_strand_knowntname_temp)
+				
+					dict_gene_strand_knowntname_temp=dict_gene							
+					if not dict_gene_strand_knowntname_temp:
+						continue
+					
+				else:		
+
+					junc=juncGA(Y,exon,J,junction)	
+
+					l=0
+					for i in junc:
+						if i<0:
+							l=l+1
+					if l==0:
+						p=[]
+						q=[]
+						for m in range(len(Y_test)):	
+							if len(Y_test[m])==1 and Y_test[m][0] not in p:
+								k=Y_test[m][0]
+								
+								p.append(k)
+								total=0
+								exon_num=0
+								for i in range(len(exon)):
+									if Y[k][i]==1:
+										exon_num=exon_num+1
+									tes=0
+									for j in range(len(Y)):
+										tes=tes+Y[j][i]*junc[j]
+									
+									total=total+exon[i]*(junc[k]/tes*Y[k][i])
+								
+								for r in range(len(Y_test)):
+									if len(Y_test[r])==1 and Y_test[r]==Y_test[m]:
+										exon[r]=total/exon_num
+			
+					
+
+
+			
+					
+
+					pop_size = PopulationC	                  # 种群数量
+					chrom_length =len(dict_gene_strand_knowntname_temp)#染色体长度
+					pc = 0.7			                  # 交配概率
+					pm = 0.05                                 # 变异概率
+					results = [[]]		                  # 存储每一代的最优解，N个二元组
+					fit_value = []		                  # 个体适应度
+					obj_value=[]
+					f_avg_list=[]
+					sigma_list=[]
+					pc_list=[]
+					pm_list=[]
+					R=[]
+					pp=0
+				
+					pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)              
+					i=0
+					m=0
+					while(i<maxEG):
+						obj_value,h = calobjValue(pop, chrom_length,exon,Y)        
+						if h == 0:       
+							fit_value = calfitValue(obj_value,pop,junction,J,chrom_length)                           
+							best_individual,best_fit = best(pop, fit_value)		
+							results.append([best_fit, best_individual])
+							total_fit = 0
+							for phd in range(len(fit_value)):
+								total_fit += fit_value[phd]
+							if total_fit!=0:
+								selection(pop,fit_value)
+								                                                                  
+								crossover(pop,fit_value,pc,pm,i,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R)
+																      
+								i=i+1
+							if total_fit==0:
+								pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)
+								m=m+1
+								if m>30:
+									break						
+						if h != 0:
+							results.append([obj_value[-1], pop[h]])
+							i=100
+							break
+		
+					if i<100:
+				
+						continue
+
+					else:
+						results = results[1:]
+						results.sort()
+
+						delete_junc=[]
+						J_test=[]
+						for i in range(len(junction)):
+							hss=[]
+							for j in range(len(J)):
+								if J[j][i]==1:
+									hss.append(j)
+							J_test.append(hss)
+					
+						for i in range(len(J_test)):
+							if len(J_test[i])>=2 and junction[i]==0.25:
+								for j in J_test[i]:
+									if j not in delete_junc:
+										delete_junc.append(j)
+										
+
+						for i in range(len(junc)):	
+							for j in range(len(junc)):
+								if junc[i]>0 and junc[j]>0 and junc[i]<=0.5 and 5*junc[i]<junc[j] and results[-1][1][i]>results[-1][1][j]:
+									if i not in delete_junc:
+										delete_junc.append(i)
+									
+										break
+								if junc[i]>0.5 and junc[j]>0 and junc[i]<=1 and 10*junc[i]<junc[j] and results[-1][1][i]>results[-1][1][j]:
+									if i not in delete_junc:
+										delete_junc.append(i)
+										
+										break
+						
+				
+
+
+					if delete_junc:
+						for i in delete_junc:
+							f=dict_gene_strand_knowntname_temp_keys[i]
+							del dict_gene_strand_knowntname_temp[f]
+
+						Y=[]
+						exon=[]
+						J = []
+						junction=[]
+						xxx=0
+						dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							if len(dict_gene_strand_knowntname_temp_keys[i])==1:
+								xxx=xxx+1
+							else:
+								pass
+						if xxx==len(dict_gene_strand_knowntname_temp_keys):
+								continue
+
+						exon_sorted=[]
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+								if dict_gene_strand_knowntname_temp_keys[i][j] not in exon_sorted:
+									exon_sorted.append(dict_gene_strand_knowntname_temp_keys[i][j])
+								else:
+									pass
+						exon_sorted=sorted(exon_sorted)
+		
+			
+
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							t_array=[]
+							for j in range(len(exon_sorted)):
+								if exon_sorted[j] not in dict_gene_strand_knowntname_temp_keys[i]:
+									t_array.append(0)
+								else:
+									t_array.append(1)
+							Y.append(t_array)
+
+						exons=[]
+						if seq_end_type=='paired_end':
+							for i in exon_sorted:
+								read_total=0
+								for read in samfile.fetch(CHR,i[0],i[1]):
+									if read.cigar:
+										if not read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+											
+											read_total+=1/float(read.get_tag('NH'))*0.5
+										elif read.mate_is_unmapped and read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):
+											
+											read_total+=1/float(read.get_tag('NH'))
+								exon.append(read_total/(i[1]-i[0])*1000)
+								exons.append(read_total)
+						elif seq_end_type=='single_end':
+							for i in exon_sorted:
+								read_total=0
+								for read in samfile.fetch(CHR,i[0],i[1]):
+									if read.cigar:
+										if read not in set_read_n_seg_dump and not (read.has_tag('XS') and read.get_tag('XS')==reverse_strand):			
+
+																
+											read_total+=1/float(read.get_tag('NH'))
+								exon.append(read_total/(i[1]-i[0])*1000)
+								exons.append(read_total)
+		
+		
+						junction_sorted=[]
+		
+
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							for j in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):	
+								if(dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]) not in junction_sorted:
+									junction_sorted.append((dict_gene_strand_knowntname_temp_keys[i][j][1],dict_gene_strand_knowntname_temp_keys[i][j+1][0]))		
+								else:
+									pass
+
+						for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+							j_array=[]
+							for j in range(len(junction_sorted)):
+								h=0
+								for k in range(len(dict_gene_strand_knowntname_temp_keys[i])-1):
+									if junction_sorted[j][0]==dict_gene_strand_knowntname_temp_keys[i][k][1] and junction_sorted[j][1]==dict_gene_strand_knowntname_temp_keys[i][k+1][0]:
+										h=h+1
+								if h==0:
+									j_array.append(0)
+								else:
+									j_array.append(1)
+							J.append(j_array)
+		
+						dict_junc_realcount_key=dict_junc_realcount.keys()
+
+						for i in junction_sorted:
+							if i in dict_junc_realcount_key:
+								junction.append(dict_junc_realcount[i])
+							else:
+								junction.append(0)
+
+
+
+						if len(dict_gene_strand_knowntname_temp)==1:
+							gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]
+							dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]]=[]			
+							dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(gtf_anno)
+							xxx=xxx+1
+							exon_cov=[]
+							t_cov=0
+
+							total_sum=0	
+							for i in exons:
+								total_sum=total_sum+i
+
+							for i in junction:
+								total_sum=total_sum-i
+
+			
+							total_len=0
+							for i in exon_sorted:
+								total_len=total_len+(i[1]-i[0])
+
+							dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(total_sum/total_len*1000)
+
+
+							dict_exon_cov_strand_keys=[]
+							dict_exon_cov_strand_keys=dict_exon_cov_strand.keys()			
+							for i in exon_sorted:
+								if i not in dict_exon_cov_strand_keys:
+									exon_cov.append(0)
+								else:
+									exon_cov.append(dict_exon_cov_strand[i])
+			
+
+							t_len=0
+							sum_t_cov=0
+							for j in range(len(exon_sorted)):
+								t_len+=(exon_sorted[j][1]-exon_sorted[j][0])
+								sum_t_cov+=exon_cov[j]*(exon_sorted[j][1]-exon_sorted[j][0])
+							t_cov=sum_t_cov/t_len
+
+							dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(t_cov)
+							dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[0]].append(exon_cov)
+							
+						
+						if len(dict_gene_strand_knowntname_temp) !=1:
+
+							junc=juncGA(Y,exon,J,junction)						
+													
+							Y_test=[]
+							for i in range(len(exon)):
+								hss=[]
+								for j in range(len(Y)):
+									if Y[j][i]==1:
+										hss.append(j)
+								Y_test.append(hss)
+							l=0
+							for i in junc:
+								if i<0:
+									l=l+1
+							if l==0:
+							
+								p=[]
+								q=[]
+								for m in range(len(Y_test)):	
+									if len(Y_test[m])==1 and Y_test[m][0] not in p:
+										k=Y_test[m][0]
+										
+										p.append(k)
+										total=0
+										exon_num=0
+										for i in range(len(exon)):
+											if Y[k][i]==1:
+												exon_num=exon_num+1
+											tes=0
+											for j in range(len(Y)):
+												tes=tes+Y[j][i]*junc[j]
+											total=total+exon[i]*(junc[k]/tes*Y[k][i])
+									
+										for r in range(len(Y_test)):
+											if len(Y_test[r])==1 and Y_test[r]==Y_test[m]:
+												exon[r]=total/exon_num
+					
+							pop_size = PopulationC		                  # 种群数量
+							chrom_length =len(dict_gene_strand_knowntname_temp)#染色体长度
+							pc = 0.7			                  # 交配概率
+							pm = 0.05                                 # 变异概率
+							results = [[]]		                  # 存储每一代的最优解，N个二元组
+							fit_value = []		                  # 个体适应度
+							obj_value=[]
+							f_avg_list=[]
+							sigma_list=[]
+							pc_list=[]
+							pm_list=[]
+							R=[]
+							pp=0
+				
+							pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)              
+							i=0
+							m=0
+							while(i<maxEG):
+								obj_value,h = calobjValue(pop, chrom_length,exon,Y)        
+								if h == 0:       
+									fit_value = calfitValue(obj_value,pop,junction,J,chrom_length)                           
+									best_individual,best_fit = best(pop, fit_value)		
+									results.append([best_fit, best_individual])
+									total_fit = 0
+									for phd in range(len(fit_value)):
+										total_fit += fit_value[phd]
+									if total_fit!=0:
+										selection(pop,fit_value)
+									                                                                  
+										crossover(pop,fit_value,pc,pm,i,f_avg_list,sigma_list,pc_list,pm_list,chrom_length,R)
+							      
+										i=i+1
+									if total_fit==0:
+										pop,R= geneEncoding(pop_size, chrom_length,junction,J,exon,Y)
+										m=m+1
+										if m>30:
+											break						
+								if h != 0:
+									results.append([obj_value[-1], pop[h]])
+									i=100
+									break
+		
+							if i<100:
+								continue
+							else:
+								results = results[1:]
+								results.sort()
+
+								p=0
+								q=0
+								for i in range(len(junc)):
+									if junc[i]>p:
+										p=junc[i]
+										q=i
+								if p>0 and results[-1][1][q]>0:
+									for i in range(len(junc)):
+										if junc[i]>0 and results[-1][1][i]>0:
+											results[-1][1][i]=results[-1][1][q]*(junc[i]/junc[q])
+	
+								sum_fpkm=0
+								total_fpkm=[]					
+								for i in range(len(junction)):
+									sum_fpkm=0
+									for j in range(len(J)):
+										if J[j][i]==1:
+											sum_fpkm=sum_fpkm+float(results[-1][1][j])
+									total_fpkm.append(sum_fpkm)
+
+
+
+								total_sum=0
+								total_len=0
+								len_t=0
+								t_fpkm=[]
+								junc_remove=0
+								for i in range(len(Y)):
+									total_sum=0
+									total_len=0
+									len_t=0
+									junc_remove=0
+									for j in range(len(Y[i])):
+										if Y[i][j]==1:
+											len_t=(exon_sorted[j][1]-exon_sorted[j][0])
+											total_sum=total_sum+len_t*float(results[-1][1][i])/1000
+											total_len=total_len+len_t
+
+									t_fpkm.append(total_sum/total_len*1000)
+
+
+								for i in range(len(t_fpkm)):
+					
+									gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]
+					
+									dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]=[]
+						
+									dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(gtf_anno)
+					
+									dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_fpkm[i])
+
+
+					
+								sum_fpkm=0
+								total_fpkm=[]
+								t_exon_cov=[]
+								exon_cov=[]
+								t_cov=[]
+								for i in range(len(exon_sorted)):
+									sum_fpkm=0
+									for j in range(len(results[-1][1])):
+										if Y[j][i]==1:
+											sum_fpkm=sum_fpkm+float(results[-1][1][j])
+									total_fpkm.append(sum_fpkm)
+						
+	
+
+								dict_exon_total_fpkm={}
+								for i in range(len(exon_sorted)):
+									dict_exon_total_fpkm[exon_sorted[i]]=total_fpkm[i]
+
+					
+
+								for i in range(len(results[-1][1])):
+									t_exon_cov=[]
+									for j in dict_gene_strand_knowntname_temp_keys[i]:
+										if j in dict_exon_cov_strand.keys():
+											ratio=float(results[-1][1][i])/dict_exon_total_fpkm[j]
+											t_exon_cov.append(float(dict_exon_cov_strand[j])*ratio)
+										else:
+											t_exon_cov.append(0)
+
+									exon_cov.append(t_exon_cov)			
+				
+	
+								for i in range(len(results[-1][1])):
+									t_len=0
+									sum_t_cov=0
+									for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+										t_len+=dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0]
+										sum_t_cov+=exon_cov[i][j]*(dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0])
+									t_cov.append(sum_t_cov/t_len)
+
+					
+				
+								for i in range(len(results[-1][1])):
+									dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_cov[i])
+									dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(exon_cov[i])
+								
+									
+					
+					else:
+					
+
+						result_tmp=[]
+						result_tmp=copy.deepcopy(results[-1][1])
+						p=0
+						q=0
+						for i in range(len(junc)):
+							if junc[i]>p:
+								p=junc[i]
+								q=i
+						if p>0 and results[-1][1][q]>0:
+							for i in range(len(junc)):
+								if junc[i]>0 and results[-1][1][i]>0:
+									results[-1][1][i]=results[-1][1][q]*(junc[i]/junc[q])
+
+						s=0
+						for i in range(len(results[-1][1])):
+							if result_tmp[i]/results[-1][1][i]>50 or result_tmp[i]/results[-1][1][i]<0.02:
+								f=dict_gene_strand_knowntname_temp_keys[i]
+								del dict_gene_strand_knowntname_temp[f]
+								s=s+1
+
+						
+						if s>0 and len(dict_gene_strand_knowntname_temp)>0:
+						
+							xxx=0
+							dict_gene_strand_knowntname_temp_keys=sorted(dict_gene_strand_knowntname_temp.keys())
+							for i in range(len(dict_gene_strand_knowntname_temp_keys)):
+								if len(dict_gene_strand_knowntname_temp_keys[i])==1:
+									xxx=xxx+1
+								else:
+									pass
+							if xxx==len(dict_gene_strand_knowntname_temp_keys):
+								continue
+							dict_tmp={}							
+							dict_tmp=statGA(frag_count_all,list_unknowm_junc_strand,list_dict_exon_strand,strand,dict_gene_strand_knowntname_temp,dict_exon_cov_strand,dict_exon_count_strand,dict_exon_actual_cov_strand,samfile_name,CHR)
+						
+							dict_gene_strand_knowntname_temp=copy.deepcopy(dict_tmp)
+
+							
+
+							if not dict_gene_strand_knowntname_temp:
+								continue
+
+						if s>0 and len(dict_gene_strand_knowntname_temp)==0:
+							continue
+
+
+						if s==0:
+							sum_fpkm=0
+							total_fpkm=[]					
+							for i in range(len(junction)):
+								sum_fpkm=0
+								for j in range(len(J)):
+									if J[j][i]==1:
+										sum_fpkm=sum_fpkm+float(results[-1][1][j])
+								total_fpkm.append(sum_fpkm)
+
+
+							total_sum=0
+							total_len=0
+							len_t=0
+							t_fpkm=[]
+							junc_remove=0
+
+							for i in range(len(Y)):
+								total_sum=0
+								total_len=0
+								len_t=0
+								junc_remove=0
+								for j in range(len(Y[i])):
+									if Y[i][j]==1:
+										len_t=(exon_sorted[j][1]-exon_sorted[j][0])
+										total_sum=total_sum+len_t*float(results[-1][1][i])/1000
+										total_len=total_len+len_t
+						
+								t_fpkm.append(total_sum/total_len*1000)
+
+
+							for i in range(len(t_fpkm)):
+					
+								gtf_anno=dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]
+					
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]]=[]
+						
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(gtf_anno)
+					
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_fpkm[i])
+
+
+					
+							sum_fpkm=0
+							total_fpkm=[]
+							t_exon_cov=[]
+							exon_cov=[]
+							t_cov=[]
+							for i in range(len(exon_sorted)):
+								sum_fpkm=0
+								for j in range(len(results[-1][1])):
+									if Y[j][i]==1:
+										sum_fpkm=sum_fpkm+float(results[-1][1][j])
+								total_fpkm.append(sum_fpkm)
+						
+	
+
+							dict_exon_total_fpkm={}
+							for i in range(len(exon_sorted)):
+								dict_exon_total_fpkm[exon_sorted[i]]=total_fpkm[i]
+
+					
+
+							for i in range(len(results[-1][1])):
+								t_exon_cov=[]
+								for j in dict_gene_strand_knowntname_temp_keys[i]:
+									if j in dict_exon_cov_strand.keys():
+										ratio=float(results[-1][1][i])/dict_exon_total_fpkm[j]
+										t_exon_cov.append(float(dict_exon_cov_strand[j])*ratio)
+									else:
+										t_exon_cov.append(0)
+
+								exon_cov.append(t_exon_cov)			
+				
+	
+							for i in range(len(results[-1][1])):
+								t_len=0
+								sum_t_cov=0
+								for j in range(len(dict_gene_strand_knowntname_temp_keys[i])):
+									t_len+=dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0]
+									sum_t_cov+=exon_cov[i][j]*(dict_gene_strand_knowntname_temp_keys[i][j][1]-dict_gene_strand_knowntname_temp_keys[i][j][0])
+								t_cov.append(sum_t_cov/t_len)
+
+					
+				
+							for i in range(len(results[-1][1])):
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(t_cov[i])
+								dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_temp_keys[i]].append(exon_cov[i])
+						
+			lms=0
+			for dict_gene_strand_knowntname_key in sorted(dict_gene_strand_knowntname_temp.keys()):
+				if  len(dict_gene_strand_knowntname_temp[dict_gene_strand_knowntname_key])>2:
+					pass
+				else:
+					lms=lms+1
+			if lms==0:		
+				list_dict_gene_strand_knowntname.append(dict_gene_strand_knowntname_temp)
+		except:	
+			continue
+		else:
+			continue	
+	return list_dict_gene_strand_knowntname
+            
+
+
+
+
+
+
+def func(frag_count_all,CHR,seq_end_type,gtf_file_name,gtf_file,max_intron_length,min_intron_length,min_junc_cov,min_anchor_length,dict_minjunc_fold,samfile_name,juncfile,insfile,PopulationC,maxEG):
+	samfile = pysam.AlignmentFile(samfile_name,'rb')
+	global dict_exon_count_unsigned_singleexon
+	
+	global dict_exon_cov_unsigned_singleexon
+	global dict_exon_count_plus_singleexon
+	global dict_exon_cov_plus_singleexon
+	global dict_exon_count_minus_singleexon
+	global dict_exon_cov_minus_singleexon
+	global list_dict_gene_strand_knowntname
+	global dict_junc_realcount
+	global gene_unsigned_singleexon
+	global knownjuncs_all
+	global read_n_count_dict
+	global dict_junc_count
+	global gene_nojunc_regions
+	global gene_plus_singleexon
+	global gene_minus_singleexon
+	global list_unknowm_junc_strand
+	global list_dict_exon_strand
+	if gtf_file_name:
+		dict_knowntname_exon_plus={}
+		dict_knowntname_exon_minus={}
+		for line in gtf_file:
+			temp=line.split('\t')
+			if temp[0]==CHR and temp[2]=='exon' and temp[6]=='+':
+				dict_knowntname_exon_plus.setdefault((re.findall('gene_id "(.+?)"',temp[8])[0],re.findall('transcript_id "(.+?)"',temp[8])[0]),[]).append((int(temp[3])-1,int(temp[4])))
+			elif temp[0]==CHR and temp[2]=='exon' and temp[6]=='-':
+				dict_knowntname_exon_minus.setdefault((re.findall('gene_id "(.+?)"',temp[8])[0],re.findall('transcript_id "(.+?)"',temp[8])[0]),[]).append((int(temp[3])-1,int(temp[4])))
+		
+		for knowntname in dict_knowntname_exon_plus:
+			dict_knowntname_exon_plus[knowntname]=sorted(dict_knowntname_exon_plus[knowntname])
+		for knowntname in dict_knowntname_exon_minus:
+			dict_knowntname_exon_minus[knowntname]=sorted(dict_knowntname_exon_minus[knowntname])
+		
+		dict_knowntname_innerexonint_plus={}
+		dict_knowntname_innerexonint_minus={}
+		for knowntname in dict_knowntname_exon_plus:
+			if len(dict_knowntname_exon_plus[knowntname])>1:
+				dict_knowntname_innerexonint_plus[knowntname]=func_iter_nested_list_tuple(dict_knowntname_exon_plus[knowntname])[1:-1]
+		for knowntname in dict_knowntname_exon_minus:
+			if len(dict_knowntname_exon_minus[knowntname])>1:
+				dict_knowntname_innerexonint_minus[knowntname]=func_iter_nested_list_tuple(dict_knowntname_exon_minus[knowntname])[1:-1]
+		
+		dict_knowntname_junc_plus={}
+		dict_knowntname_junc_minus={}
+		for knowntname in dict_knowntname_innerexonint_plus:
+			dict_knowntname_junc_plus[knowntname]=set(zip(dict_knowntname_innerexonint_plus[knowntname][0::2],dict_knowntname_innerexonint_plus[knowntname][1::2]))
+		for knowntname in dict_knowntname_innerexonint_minus:
+			dict_knowntname_junc_minus[knowntname]=set(zip(dict_knowntname_innerexonint_minus[knowntname][0::2],dict_knowntname_innerexonint_minus[knowntname][1::2]))
+		
+		knownjuncs_plus=[]
+		knownjuncs_minus=[]
+		for exonlist in dict_knowntname_innerexonint_plus.values():
+			knownjuncs_plus.extend(zip(exonlist[0::2],exonlist[1::2]))
+		for exonlist in dict_knowntname_innerexonint_minus.values():
+			knownjuncs_minus.extend(zip(exonlist[0::2],exonlist[1::2]))
+		
+		knownjuncs_plus=list(set(knownjuncs_plus))
+		knownjuncs_minus=list(set(knownjuncs_minus))
+		knownjuncs_all=knownjuncs_plus+knownjuncs_minus
+	else:
+		knownjuncs_plus=[]
+		knownjuncs_minus=[]
+		knownjuncs_all=[]
+	
+	
+	read_n_count_dict={} 
+	read_n_seg_dict={}
+	
+	
+	
+	
+	dict_junc_realcount={} 
+	for read in samfile.fetch(CHR): 
+		if read.cigar:
+			if 3 in zip(*read.cigar)[0] and read.has_tag('XS'):
+				read_n_ref_blocks=func_read_n_ref_blocks(read)
+				for i in range(len(read_n_ref_blocks)-1):
+					junc=(read_n_ref_blocks[i][1],read_n_ref_blocks[i+1][0])
+					if dict_junc_realcount.get(junc):
+						if read.is_paired:
+							dict_junc_realcount[junc]+=1/float(read.get_tag('NH'))*0.5
+						else:
+							dict_junc_realcount[junc]+=1/float(read.get_tag('NH'))
+					else:
+						if read.is_paired:
+							dict_junc_realcount[junc]=1/float(read.get_tag('NH'))*0.5
+						else:
+							dict_junc_realcount[junc]=1/float(read.get_tag('NH'))
+				if read.mapping_quality==0: 
+					for i in range(len(read_n_ref_blocks)-1): 
+						junc=(read_n_ref_blocks[i][1],read_n_ref_blocks[i+1][0])
+						if read_n_count_dict.get(junc):
+							read_n_count_dict[junc][3]+=1 
+							read_n_seg_dict[junc][3].append(read)
+						else:
+							strand=read.get_tag('XS')
+							read_n_seg_dict[junc]=[strand,[],[],[read],[]]
+							read_n_count_dict[junc]=[strand,0,0,1,0,0]
+				elif read.mapping_quality==1:
+					for i in range(len(read_n_ref_blocks)-1): 
+						junc=(read_n_ref_blocks[i][1],read_n_ref_blocks[i+1][0])
+						if read_n_count_dict.get(junc):
+							read_n_count_dict[junc][4]+=1 
+							read_n_seg_dict[junc][4].append(read)
+						else:
+							strand=read.get_tag('XS')
+							read_n_seg_dict[junc]=[strand,[],[],[],[read]]
+							read_n_count_dict[junc]=[strand,0,0,0,1,0]
+				elif len(read_n_ref_blocks)==2: 
+					if read_n_ref_blocks[0][1]-read_n_ref_blocks[0][0]<min_anchor_length or read_n_ref_blocks[1][1]-read_n_ref_blocks[1][0]<min_anchor_length: 
+						junc=(read_n_ref_blocks[0][1],read_n_ref_blocks[1][0])
+						if read_n_count_dict.get(junc):
+							read_n_count_dict[junc][2]+=1 
+							read_n_seg_dict[junc][2].append(read)
+						else:
+							strand=read.get_tag('XS')
+							read_n_count_dict[junc]=[strand,0,1,0,0,0]
+							read_n_seg_dict[junc]=[strand,[],[read],[],[]]
+					else:
+						junc=(read_n_ref_blocks[0][1],read_n_ref_blocks[1][0])
+						if read_n_count_dict.get(junc):
+							read_n_count_dict[junc][1]+=1 
+							read_n_seg_dict[junc][1].append(read)
+						else:
+							strand=read.get_tag('XS')
+							read_n_count_dict[junc]=[strand,1,0,0,0,0]
+							read_n_seg_dict[junc]=[strand,[read],[],[],[]]
+						if read.get_tag('NH')==1:
+							read_n_count_dict[junc][5]+=1
+				elif len(read_n_ref_blocks)>=3: 
+					for i in range(len(read_n_ref_blocks)-1):
+						if read_n_ref_blocks[i][1]-read_n_ref_blocks[i][0]<min_anchor_length or read_n_ref_blocks[i+1][1]-read_n_ref_blocks[i+1][0]<min_anchor_length:
+							junc=(read_n_ref_blocks[i][1],read_n_ref_blocks[i+1][0])
+							if read_n_count_dict.get(junc):
+								read_n_count_dict[junc][2]+=1 
+								read_n_seg_dict[junc][2].append(read)
+							else:
+								strand=read.get_tag('XS')
+								read_n_count_dict[junc]=[strand,0,1,0,0,0]
+								read_n_seg_dict[junc]=[strand,[],[read],[],[]]
+						else:
+							junc=(read_n_ref_blocks[i][1],read_n_ref_blocks[i+1][0])
+							if read_n_count_dict.get(junc):
+								read_n_count_dict[junc][1]+=1 
+								read_n_seg_dict[junc][1].append(read)
+							else:
+								strand=read.get_tag('XS')
+								read_n_count_dict[junc]=[strand,1,0,0,0,0]
+								read_n_seg_dict[junc]=[strand,[read],[],[],[]]
+							if read.get_tag('NH')==1:
+								read_n_count_dict[junc][5]+=1
+	
+	
+	
+	read_n_list=read_n_count_dict.keys()
+	read_n_dump_list=[]
+	read_n_filter_list=[]
+	dict_junc_count={}
+	dict_pos_count={}
+	
+	
+	for key in read_n_count_dict:
+		value=read_n_count_dict[key]
+		dict_junc_count[key]=sum(value[1:5])
+		
+		
+		if key not in knownjuncs_all:
+			value_sum=5*dict_junc_count[key]
+			if float(value[1])<float(value[3])*0.7 or (dict_junc_count[key]>=2 and float(value[5])/float(dict_junc_count[key])<0.7) or min_intron_length>key[1]-key[0] or key[1]-key[0]>max_intron_length or dict_junc_count[key]<min_junc_cov:
+				read_n_dump_list.append(key)
+			elif dict_pos_count.get(key[0]):
+				if value_sum<dict_pos_count[key[0]]:
+					read_n_dump_list.append(key)
+			elif not dict_pos_count.get(key[0]):
+				dict_pos_count[key[0]]=samfile.count(CHR,key[0],key[0]+1)
+				if value_sum<dict_pos_count[key[0]]:
+					read_n_dump_list.append(key)
+				elif dict_pos_count.get(key[1]-1):
+					if value_sum<dict_pos_count[key[1]-1]:
+						read_n_dump_list.append(key)
+				elif not dict_pos_count.get(key[1]-1):
+					dict_pos_count[key[1]-1]=samfile.count(CHR,key[1]-1,key[1])
+					if value_sum<dict_pos_count[key[1]-1]:
+						read_n_dump_list.append(key)
+		
+		else:
+			value_sum=30*dict_junc_count[key]
+			if dict_junc_count[key]>=5 and float(value[5])/float(dict_junc_count[key])<0.1: 
+				read_n_dump_list.append(key)
+			if dict_pos_count.get(key[0]):
+				if value_sum<dict_pos_count[key[0]]:
+					read_n_dump_list.append(key)
+			elif not dict_pos_count.get(key[0]):
+				dict_pos_count[key[0]]=samfile.count(CHR,key[0],key[0]+1)
+				if value_sum<dict_pos_count[key[0]]:
+					read_n_dump_list.append(key)
+				elif dict_pos_count.get(key[1]-1):
+					if value_sum<dict_pos_count[key[1]-1]:
+						read_n_dump_list.append(key)
+				elif not dict_pos_count.get(key[1]-1):
+					dict_pos_count[key[1]-1]=samfile.count(CHR,key[1]-1,key[1])
+					if value_sum<dict_pos_count[key[1]-1]:
+						read_n_dump_list.append(key)
+	
+	
+	read_n_count_dict_keys=sorted(read_n_count_dict.keys())
+	for junc_index in range(len(read_n_count_dict_keys)-1):
+		for junc_index2 in range(junc_index+1,len(read_n_count_dict_keys)):
+			if abs(read_n_count_dict_keys[junc_index][0]-read_n_count_dict_keys[junc_index2][0])<10:
+				if abs(read_n_count_dict_keys[junc_index][1]-read_n_count_dict_keys[junc_index2][1])<10:
+					if float(dict_junc_count[read_n_count_dict_keys[junc_index]])/float(dict_junc_count[read_n_count_dict_keys[junc_index2]])<0.3:
+						read_n_dump_list.append(read_n_count_dict_keys[junc_index])
+					elif float(dict_junc_count[read_n_count_dict_keys[junc_index2]])/float(dict_junc_count[read_n_count_dict_keys[junc_index]])<0.3:
+						read_n_dump_list.append(read_n_count_dict_keys[junc_index2])
+			else:
+				break
+	
+	
+	
+	
+	set_read_n_dump_list=set(read_n_dump_list)
+	for i in read_n_list:
+		if i not in set_read_n_dump_list:
+			read_n_filter_list.append(i)
+			del read_n_seg_dict[i]
+	
+	global set_read_n_seg_dump
+	set_read_n_seg_dump=set(func_iter_nested_list_tuple(map(lambda x: x[1:],read_n_seg_dict.values())))
+	
+	read_n_filter_list_sort=sorted(read_n_filter_list,key=lambda x:(x[0],x[1])) 
+	read_n_filter_sort_list=[]
+	for i in read_n_filter_list_sort:
+		read_n_filter_sort_list.append(i+(read_n_count_dict[i][0],)) 
+	
+	read_n_minus=[] 
+	for i in read_n_filter_sort_list:
+		if i[2]=='-':
+			read_n_minus.append(i[0:2])
+	
+	set_read_n_minus=set(read_n_minus)
+	
+	minus_left_list=map(lambda x:x[0],read_n_minus) 
+	len_minus_left_list=len(minus_left_list)
+	read_n_plus=[] 
+	for i in read_n_filter_sort_list:
+		if i[2]=='+':
+			read_n_plus.append(i[0:2])
+	
+	set_read_n_plus=set(read_n_plus)
+	
+	plus_left_list=map(lambda x:x[0],read_n_plus) 
+	len_plus_left_list=len(plus_left_list)
+	
+	
+	
+	global gene_edges
+	gene_edges=[]
+	
+	global t_edge_strand
+	global gene_strand
+	global gene_edge_strand
+	global dict_exon_cov_strand
+	global dict_exon_actual_cov_strand
+	global dict_exon_count_strand
+	global list_dict_junc_t_index_strand
+	global dict_knowntname_relative_strand
+	global dict_gene_strand_knowntname
+
+	
+	
+	t_edge_strand=[]
+	gene_strand=[]
+	gene_edge_strand=[]
+	dict_exon_cov_strand={}
+	dict_exon_actual_cov_strand={}
+	dict_exon_count_strand={}
+	list_dict_junc_t_index_strand=[]
+	dict_knowntname_relative_strand={}
+	dict_gene_strand_knowntname={}
+	
+	if gtf_file_name:
+		gtf_tuple=(dict_knowntname_exon_minus,dict_knowntname_innerexonint_minus,dict_knowntname_junc_minus)
+		multi_exon(len_strand_left_list=len_minus_left_list,strand_left_list=minus_left_list,read_n_strand=read_n_minus,strand='-',samfile_name=samfile_name,CHR=CHR,gtf_tuple=gtf_tuple)
+	else:
+		multi_exon(len_strand_left_list=len_minus_left_list,strand_left_list=minus_left_list,read_n_strand=read_n_minus,strand='-',samfile_name=samfile_name,CHR=CHR,gtf_tuple=())
+	
+	
+	t_edge_minus=t_edge_strand
+	gene_minus=gene_strand
+	gene_edge_minus=gene_edge_strand
+	dict_exon_cov_minus=dict_exon_cov_strand
+	dict_exon_actual_cov_minus=dict_exon_actual_cov_strand
+	dict_exon_count_minus=dict_exon_count_strand
+	list_dict_junc_t_index_minus=list_dict_junc_t_index_strand
+	dict_knowntname_relative_minus=dict_knowntname_relative_strand
+	dict_gene_minus_knowntname_temp_big=dict_gene_strand_knowntname_temp_big	
+	
+	t_edge_strand=[]
+	gene_strand=[]
+	gene_edge_strand=[]
+	dict_exon_cov_strand={}
+	dict_exon_actual_cov_strand={}
+	dict_exon_count_strand={}
+	list_dict_junc_t_index_strand=[]
+	dict_knowntname_relative_strand={}
+	dict_gene_strand_knowntname={}
+	if gtf_file_name:
+		gtf_tuple=dict_knowntname_exon_plus,dict_knowntname_innerexonint_plus,dict_knowntname_junc_plus
+		multi_exon(len_strand_left_list=len_plus_left_list,strand_left_list=plus_left_list,read_n_strand=read_n_plus,strand='+',samfile_name=samfile_name,CHR=CHR,gtf_tuple=gtf_tuple)
+	else:
+		multi_exon(len_strand_left_list=len_plus_left_list,strand_left_list=plus_left_list,read_n_strand=read_n_plus,strand='+',samfile_name=samfile_name,CHR=CHR,gtf_tuple=())
+	
+	t_edge_plus=t_edge_strand
+	gene_plus=gene_strand
+	gene_edge_plus=gene_edge_strand
+	dict_exon_cov_plus=dict_exon_cov_strand
+	dict_exon_actual_cov_plus=dict_exon_actual_cov_strand
+	dict_exon_count_plus=dict_exon_count_strand
+	list_dict_junc_t_index_plus=list_dict_junc_t_index_strand
+	dict_knowntname_relative_plus=dict_knowntname_relative_strand
+	dict_gene_plus_knowntname_temp_big=dict_gene_strand_knowntname_temp_big
+	
+	gene_lr_edges=sorted(set(func_iter_nested_list_tuple(t_edge_minus+t_edge_plus)))
+	gene_lr_edges_dict={}.fromkeys(gene_lr_edges,0)
+	
+	for gene_edge in t_edge_minus+t_edge_plus:
+		for gene_lr_edge in gene_lr_edges[gene_lr_edges.index(gene_edge[0]):gene_lr_edges.index(gene_edge[1])]:
+			gene_lr_edges_dict[gene_lr_edge]+=1
+	
+	gene_nojunc_regions=[]
+	for gene_lr_edge_index in range(len(gene_lr_edges)-1):
+		if not gene_lr_edges_dict[gene_lr_edges[gene_lr_edge_index]]:
+			gene_nojunc_regions.append((gene_lr_edges[gene_lr_edge_index],gene_lr_edges[gene_lr_edge_index+1]))
+	
+	
+	sorted_gene_lr_edges_dict_keys=sorted(gene_lr_edges_dict.keys())
+	
+	
+	if sorted_gene_lr_edges_dict_keys:
+		if sorted_gene_lr_edges_dict_keys[0]>0:
+			gene_nojunc_regions.insert(0,(0,sorted_gene_lr_edges_dict_keys[0]))
+		if sorted_gene_lr_edges_dict_keys[-1]<samfile.lengths[samfile.references.index(CHR)]:
+			gene_nojunc_regions.append((sorted_gene_lr_edges_dict_keys[-1],samfile.lengths[samfile.references.index(CHR)]))
+	else:
+		gene_nojunc_regions.append((0,samfile.lengths[samfile.references.index(CHR)]))
+	
+	
+	
+	
+	gene_unsigned_singleexon=[]
+	dict_exon_cov_unsigned_singleexon={}
+	dict_exon_count_unsigned_singleexon={}
+	
+	gene_plus_singleexon=[]
+	dict_exon_cov_plus_singleexon={}
+	dict_exon_count_plus_singleexon={}
+	
+	gene_minus_singleexon=[]
+	dict_exon_cov_minus_singleexon={}
+	dict_exon_count_minus_singleexon={}
+	
+	
+	
+	gene_single_exon_temp_list=[(-2,-1)]
+	def check_read(read):
+		if read.cigar:
+			return 3 not in zip(*read.cigar)[0]
+	
+	gene_nojunc_region_edges=func_iter_nested_list_tuple(gene_nojunc_regions)
+	
+	for gene_nojunc_region in gene_nojunc_regions:
+		point=gene_nojunc_region[0] 
+		while point<gene_nojunc_region[1]:
+			for read in samfile.fetch(CHR,point,gene_nojunc_region[1]):
+				if read.cigar:
+					read=read
+					
+					break
+			else:
+				break
+			subregion_left=max(read.reference_start,point)
+			
+			subread_count=0
+			
+			for subread in samfile.fetch(CHR,subregion_left,gene_nojunc_region[1]):
+				if subread.cigar:
+					if 3 not in zip(*subread.cigar)[0] and subread.mapping_quality>0:
+						subread_count+=1
+					
+					
+					if subread_count==10:
+						if min(gene_nojunc_region[1],subread.reference_end)-subregion_left<1000:
+							
+							subregion_right=min(gene_nojunc_region[1],subregion_left+1000)
+							sub_region_cov=map(max,zip(*samfile.count_coverage(CHR,subregion_left,subregion_right,read_callback=check_read)))
+							
+							sub_base=subregion_left
+							sub_right=subregion_right-subregion_left-1
+							gene_right_temp=0
+							
+							i=0
+							while i<sub_right:
+								i=i+1
+								if sub_region_cov[i]>10:
+									base_middle_index=i
+									while sub_region_cov[i]>0 and i>gene_right_temp:
+										i=i-1
+										if i==gene_right_temp:
+											gene_left_temp=i
+											break
+										if sub_region_cov[i]==0:
+											count=0
+											while sub_region_cov[i]==0 and i>gene_right_temp and count<50: #
+												i=i-1
+												count+=1
+											if count==50 or i==gene_right_temp:
+												gene_left_temp=i+count+1
+												break
+									
+									
+									i=base_middle_index
+									while sub_region_cov[i]>0 and i<sub_right:
+										i=i+1
+										if i==sub_right:
+											gene_right_temp=i
+											break
+										if sub_region_cov[i]==0:
+											count=0
+											while sub_region_cov[i]==0 and i<sub_right and count<50:
+												i=i+1
+												count+=1
+											if count==50 or i==sub_right:
+												gene_right_temp=i-count
+												break
+									
+									sub2=sub_region_cov[gene_left_temp:gene_right_temp]									
+									try:
+										sub_left2=sub_region_cov[gene_left_temp+1:gene_left_temp+15]
+										if len(set(sub_left2))==1 and sub_left2[0]>=10 and sub2 and max(sub2)<3*sub_left2[0]:
+											continue
+										sub_right2=sub_region_cov[gene_right_temp-15:gene_right_temp-1]
+										if len(set(sub_right2))==1 and sub_right2[0]>=10 and sub2 and max(sub2)<3*sub_right2[0]:
+											continue
+									except:
+										pass
+									
+									
+									if abs(sub_base+gene_left_temp-gene_single_exon_temp_list[-1][1])<5:
+										gene_single_exon_temp_list[-1]=(gene_single_exon_temp_list[-1][0],sub_base+gene_right_temp)
+									elif gene_right_temp-gene_left_temp>110:
+										gene_single_exon_temp_list.append((sub_base+gene_left_temp,sub_base+gene_right_temp))
+							
+							point=subregion_right
+							
+							
+							break
+						else:
+							
+							subregion_right=min(gene_nojunc_region[1],subread.reference_end)
+							
+							point=subregion_right
+							point=max(gene_nojunc_region[0],subread.reference_start-100)
+							break 
+			else:
+				
+				point=gene_nojunc_region[1]
+	
+	
+	del gene_single_exon_temp_list[0] 
+	
+	gene_single_exon_temp_list_temp=copy.deepcopy(gene_single_exon_temp_list)
+	gene_single_exon_temp_list=[]
+	for gene in gene_single_exon_temp_list_temp:
+		for gene_nojunc_region_edge in gene_nojunc_region_edges:
+			if 0<=abs(gene[0]-gene_nojunc_region_edge)<500 or 0<=abs(gene[1]-gene_nojunc_region_edge)<500:
+				break
+		else:
+			gene_single_exon_temp_list.append(gene)
+	
+	
+	gene_single_exon_strict_count_temp_list=[]
+	gene_single_exon_easy_count_temp_list=[]
+	if seq_end_type=='paired_end':
+		for gene in gene_single_exon_temp_list:
+			strict=0
+			easy=0
+			for read in samfile.fetch(CHR,gene[0],gene[1]):
+				if read.cigar:
+					if not read.mate_is_unmapped and 3 not in zip(*read.cigar)[0]:
+						strict+=1/float(read.get_tag('NH'))*0.5
+						easy+=0.5
+					elif read.mate_is_unmapped and 3 not in zip(*read.cigar)[0]:
+						strict+=1/float(read.get_tag('NH'))
+						easy+=1
+			gene_single_exon_strict_count_temp_list.append(strict)
+			gene_single_exon_easy_count_temp_list.append(easy)
+	elif seq_end_type=='single_end':
+		for gene in gene_single_exon_temp_list:
+			strict=0
+			easy=0
+			for read in samfile.fetch(CHR,gene[0],gene[1]):
+				if read.cigar:
+					strict+=1/float(read.get_tag('NH'))
+					easy+=1
+			gene_single_exon_strict_count_temp_list.append(strict)
+			gene_single_exon_easy_count_temp_list.append(easy)
+	
+	
+	
+	
+	for gene_index in range(len(gene_single_exon_temp_list)):
+		if float(gene_single_exon_strict_count_temp_list[gene_index])/float(gene_single_exon_easy_count_temp_list[gene_index])>0.5:
+			for read in samfile.fetch(CHR,gene_single_exon_temp_list[gene_index][0],gene_single_exon_temp_list[gene_index][1]):
+				if read.cigar:
+					if read.has_tag('XS') and read.get_tag('XS')=='+' and 3 not in zip(*read.cigar)[0]:
+						gene_plus_singleexon.append(gene_single_exon_temp_list[gene_index])
+						dict_exon_count_plus_singleexon[gene_single_exon_temp_list[gene_index]]=gene_single_exon_strict_count_temp_list[gene_index]
+						break
+	
+	
+	for gene_index in range(len(gene_single_exon_temp_list)):
+		if float(gene_single_exon_strict_count_temp_list[gene_index])/float(gene_single_exon_easy_count_temp_list[gene_index])>0.5:
+			for read in samfile.fetch(CHR,gene_single_exon_temp_list[gene_index][0],gene_single_exon_temp_list[gene_index][1]):
+				if read.cigar:
+					if read.has_tag('XS') and read.get_tag('XS')=='-' and 3 not in zip(*read.cigar)[0]:
+						gene_minus_singleexon.append(gene_single_exon_temp_list[gene_index])
+						dict_exon_count_minus_singleexon[gene_single_exon_temp_list[gene_index]]=gene_single_exon_strict_count_temp_list[gene_index]
+						break
+	
+	set_gene_plus_singleexon=set(gene_plus_singleexon)
+	set_gene_minus_singleexon=set(gene_minus_singleexon)
+	for gene_index in range(len(gene_single_exon_temp_list)):
+		if float(gene_single_exon_strict_count_temp_list[gene_index])/float(gene_single_exon_easy_count_temp_list[gene_index])>0.5:
+			if gene_single_exon_temp_list[gene_index] not in set_gene_plus_singleexon and gene_single_exon_temp_list[gene_index] not in set_gene_minus_singleexon:
+				gene_unsigned_singleexon.append(gene_single_exon_temp_list[gene_index])
+				dict_exon_count_unsigned_singleexon[gene_single_exon_temp_list[gene_index]]=gene_single_exon_strict_count_temp_list[gene_index]
+	
+	
+	
+	def check_read(read):
+		if read.cigar:
+			return 3 not in zip(*read.cigar)[0]
+	
+	for gene in gene_plus_singleexon:
+		dict_exon_cov_plus_singleexon[gene]=float(sum(map(max,zip(*samfile.count_coverage(CHR,gene[0],gene[1],read_callback=check_read)))))/float(gene[1]-gene[0])
+	
+	for gene in gene_minus_singleexon:
+		dict_exon_cov_minus_singleexon[gene]=float(sum(map(max,zip(*samfile.count_coverage(CHR,gene[0],gene[1],read_callback=check_read)))))/float(gene[1]-gene[0])
+	
+	for gene in gene_unsigned_singleexon:
+		dict_exon_cov_unsigned_singleexon[gene]=float(sum(map(max,zip(*samfile.count_coverage(CHR,gene[0],gene[1],read_callback=check_read)))))/float(gene[1]-gene[0])
+####################################singleexon############################################
+	exon_boundary=[]
+	boundary=[]
+	f=open(insfile)
+	fp=0
+	fpk=0
+	for line in f:
+		try:	
+			temp=line.split('\t')
+			if line[0]!='@' and temp[0]=='Boundary':
+				if boundary:
+					fp=0
+					exon_boundary.append(boundary)
+					boundary=[]
+					if temp[1]==CHR:
+						fp=1
+						temp[4]=temp[4].strip('\n')		
+						boundary.append(temp[4])
+				else:
+					if temp[1]==CHR:
+						fp=1
+						temp[4]=temp[4].strip('\n')
+						boundary.append(temp[4])
+			if line[0]!='@' and len(temp)==9 and temp[0]>10000 and temp[1]>10000 and fp==1:
+				if boundary:
+					temp[0]=int(temp[0])
+					temp[1]=int(temp[1])
+					boundary.append((temp[0],temp[1]))	
+		except:
+			continue
+		else:
+			continue
+			
+	f.close()
+
+
+
+	cem_singleexon_minus=[]
+	cem_singleexon_plus=[]
+	cem_singleexon_unsigned=[]
+	boundary_tmp=[]	
+	
+	for i in exon_boundary:
+		boundary_tmp=[]
+		i[0]=str(i[0])
+		if len(i)==2:
+			if i[0]=='+':
+				cem_singleexon_plus.append(i[1])
+			if i[0]=='-':
+				cem_singleexon_minus.append(i[1])
+			if i[0]=='.':
+				cem_singleexon_unsigned.append(i[1])
+
+		if len(i)==3:
+			boundary_tmp.append(i[0])
+			exon_start=i[1][0]
+			exon_end=i[1][1]
+			if i[2][0]==i[1][1] or i[2][0]==i[1][1]+1:
+				exon_end=i[2][1]
+				boundary_tmp.append((exon_start,exon_end))
+			else:
+				boundary_tmp.append(i[1])
+				boundary_tmp.append(i[2])
+		
+		if len(i)>3:
+			boundary_tmp.append(i[0])
+			exon_start=i[1][0]
+			exon_end=i[1][1]
+			for j in range(len(i)-2):
+				if i[j+2][0]==i[j+1][1] or i[j+2][0]==i[j+1][1]+1:
+					exon_end=i[j+2][1]
+				else:
+					boundary_tmp.append((exon_start,exon_end))
+					exon_start=i[j+2][0]
+					exon_end=i[j+2][1]
+			boundary_tmp.append((exon_start,exon_end))
+
+		if len(boundary_tmp)==2:
+			if i[0]=='+':
+				cem_singleexon_plus.append(boundary_tmp[1])
+			if i[0]=='-':
+				cem_singleexon_minus.append(boundary_tmp[1])
+			if i[0]=='.':
+				cem_singleexon_unsigned.append(boundary_tmp[1])
+	
+
+	gene_minus_singleexon_tmp=[]
+	gene_plus_singleexon_tmp=[]
+	gene_unsigned_singleexon_tmp=[]
+
+	if gene_minus_singleexon and cem_singleexon_minus:
+		for gene in gene_minus_singleexon:
+			for h in cem_singleexon_minus:
+				if abs(gene[0]-h[0])<10 and abs(gene[1]-h[1])<10:
+					gene_minus_singleexon_tmp.append(gene)
+		gene_minus_singleexon=gene_minus_singleexon_tmp
+	else:
+		gene_minus_singleexon=[]
+
+	if gene_plus_singleexon and cem_singleexon_plus:
+		for gene in gene_plus_singleexon:
+			for h in cem_singleexon_plus:
+				if abs(gene[0]-h[0])<10 and abs(gene[1]-h[1])<10:
+					gene_plus_singleexon_tmp.append(gene)
+		gene_plus_singleexon=gene_plus_singleexon_tmp
+	else:
+		gene_plus_singleexon=[]
+
+	if gene_unsigned_singleexon and cem_singleexon_unsigned:
+		for gene in gene_unsigned_singleexon:
+			for h in cem_singleexon_unsigned:
+				if abs(gene[0]-h[0])<10 and abs(gene[1]-h[1])<10:
+					gene_unsigned_singleexon_tmp.append(gene)
+		gene_unsigned_singleexon=gene_unsigned_singleexon_tmp
+	else:
+		gene_unsigned_singleexon=[]
+	
+########################multiexon###########################
+
+##########cem##########
+	list_unknowm_junc_strand=[]
+	list_dict_exon_strand=[]
+	if gtf_file_name:
+		list_dict_exon_minus=cem(CHR=CHR,dict_knowntname_innerexonint_strand=dict_knowntname_innerexonint_minus,dict_knowntname_exon_strand=dict_knowntname_exon_minus,strand='-',junction_name=juncfile)
+		list_unknowm_junc_minus=list_unknowm_junc_strand
+	else:
+		list_dict_exon_minus=cem2(CHR=CHR,strand='-',junction_name=juncfile,instance_name=insfile)
+		list_unknowm_junc_minus=[]
+
+		
+
+
+
+	list_unknowm_junc_strand=[]
+	list_dict_exon_strand=[]	
+	if gtf_file_name:
+		list_dict_exon_plus=cem(CHR=CHR,dict_knowntname_innerexonint_strand=dict_knowntname_innerexonint_plus,dict_knowntname_exon_strand=dict_knowntname_exon_plus,strand='+',junction_name=juncfile)
+		list_unknowm_junc_plus=list_unknowm_junc_strand
+	else:
+		list_dict_exon_plus=cem2(CHR=CHR,strand='+',junction_name=juncfile,instance_name=insfile)
+		list_unknowm_junc_plus=[]
+	
+	
+#########Genetic_algorithm#############
+
+	list_dict_gene_minus_knowntname=[]
+	list_dict_gene_strand_knowntname=[]
+	if gtf_file_name:
+		list_dict_gene_minus_knowntname=Genetic_algorithm(frag_count_all=frag_count_all,list_unknowm_junc_strand=list_unknowm_junc_minus,list_dict_exon_strand=list_dict_exon_minus,strand='-',dict_gene_strand_knowntname_temp_big=dict_gene_minus_knowntname_temp_big,dict_exon_cov_strand=dict_exon_cov_minus,dict_exon_count_strand=dict_exon_count_minus,dict_exon_actual_cov_strand=dict_exon_actual_cov_minus,samfile_name=samfile_name,CHR=CHR,PopulationC=PopulationC,maxEG=maxEG)	
+		list_dict_gene_minus_knowntname_temp=[]
+		list_dict_gene_minus_knowntname_temp=list_dict_gene_minus_knowntname
+	else:
+		list_unknowm_junc_minus=[]
+		dict_gene_minus_knowntname_temp_big=[]
+		list_dict_gene_minus_knowntname=Genetic_algorithm(frag_count_all=frag_count_all,list_unknowm_junc_strand=list_unknowm_junc_minus,list_dict_exon_strand=list_dict_exon_minus,strand='-',dict_gene_strand_knowntname_temp_big=dict_gene_minus_knowntname_temp_big,dict_exon_cov_strand=dict_exon_cov_minus,dict_exon_count_strand=dict_exon_count_minus,dict_exon_actual_cov_strand=dict_exon_actual_cov_minus,samfile_name=samfile_name,CHR=CHR,PopulationC=PopulationC,maxEG=maxEG)	
+		list_dict_gene_minus_knowntname_temp=[]
+		list_dict_gene_minus_knowntname_temp=list_dict_gene_minus_knowntname
+		
+
+
+	list_dict_gene_plus_knowntname=[]
+	list_dict_gene_strand_knowntname=[]
+	if gtf_file_name:
+		list_dict_gene_plus_knowntname=Genetic_algorithm(frag_count_all=frag_count_all,list_unknowm_junc_strand=list_unknowm_junc_plus,list_dict_exon_strand=list_dict_exon_plus,strand='+',dict_gene_strand_knowntname_temp_big=dict_gene_plus_knowntname_temp_big,dict_exon_cov_strand=dict_exon_cov_plus,dict_exon_count_strand=dict_exon_count_plus,dict_exon_actual_cov_strand=dict_exon_actual_cov_plus,samfile_name=samfile_name,CHR=CHR,PopulationC=PopulationC,maxEG=maxEG)
+		list_dict_gene_plus_knowntname_temp=[]
+		list_dict_gene_plus_knowntname_temp=list_dict_gene_plus_knowntname
+	else:
+		list_unknowm_junc_plus=[]
+		dict_gene_plus_knowntname_temp_big=[]
+		list_dict_gene_plus_knowntname=Genetic_algorithm(frag_count_all=frag_count_all,list_unknowm_junc_strand=list_unknowm_junc_plus,list_dict_exon_strand=list_dict_exon_plus,strand='+',dict_gene_strand_knowntname_temp_big=dict_gene_plus_knowntname_temp_big,dict_exon_cov_strand=dict_exon_cov_plus,dict_exon_count_strand=dict_exon_count_plus,dict_exon_actual_cov_strand=dict_exon_actual_cov_plus,samfile_name=samfile_name,CHR=CHR,PopulationC=PopulationC,maxEG=maxEG)	
+		list_dict_gene_plus_knowntname_temp=[]
+		list_dict_gene_plus_knowntname_temp=list_dict_gene_plus_knowntname
+
+	
+
+	list_dict_gene_minus_knowntname=[]
+	for dict_gene_minus_knowntname in list_dict_gene_minus_knowntname_temp:
+		if len(dict_gene_minus_knowntname)==1:
+			t_minus=dict_gene_minus_knowntname.keys()[0]
+			if len(t_minus)==2 and not dict_gene_minus_knowntname.values()[0][0]:
+				for dict_gene_plus_knowntname in list_dict_gene_plus_knowntname_temp:
+					for t_plus in dict_gene_plus_knowntname:
+						if len(t_plus)>2 and t_minus[0][1]>t_plus[0][0] and t_minus[1][0]<t_plus[-1][1]:
+							for exon in t_plus:
+								if exon[0]>t_minus[0][1] and exon[1]<t_minus[1][0]:
+									list_dict_gene_minus_knowntname.append(dict_gene_minus_knowntname)
+									break
+							else:
+								continue
+							break
+					else:
+						continue
+					break
+	
+	for dict_gene_minus_knowntname in list_dict_gene_minus_knowntname_temp:
+		if len(dict_gene_minus_knowntname)==1:
+			t_minus=dict_gene_minus_knowntname.keys()[0]
+			if len(t_minus)==2 and not dict_gene_minus_knowntname.values()[0][0]:
+				for dict_gene_plus_knowntname in list_dict_gene_plus_knowntname_temp:
+					for t_plus in dict_gene_plus_knowntname:
+						if len(t_plus)>2 and t_minus[0][1]>t_plus[0][0] and t_minus[1][0]<t_plus[-1][1]:
+							break
+					else:
+						continue
+					break
+				else:
+					list_dict_gene_minus_knowntname.append(dict_gene_minus_knowntname)
+			else:
+				list_dict_gene_minus_knowntname.append(dict_gene_minus_knowntname)
+		else:
+			list_dict_gene_minus_knowntname.append(dict_gene_minus_knowntname)
+	
+	
+	list_dict_gene_plus_knowntname=[]
+	
+	for dict_gene_plus_knowntname in list_dict_gene_plus_knowntname_temp:
+		if len(dict_gene_plus_knowntname)==1:
+			t_plus=dict_gene_plus_knowntname.keys()[0]
+			if len(t_plus)==2 and not dict_gene_plus_knowntname.values()[0][0]:
+				for dict_gene_minus_knowntname in list_dict_gene_minus_knowntname_temp:
+					for t_minus in dict_gene_minus_knowntname:
+						if len(t_minus)>2 and t_plus[0][1]>t_minus[0][0] and t_plus[1][0]<t_minus[-1][1]:
+							for exon in t_minus:
+								if exon[0]>t_plus[0][1] and exon[1]<t_plus[1][0]:
+									list_dict_gene_plus_knowntname.append(dict_gene_plus_knowntname)
+									break
+							else:
+								continue
+							break
+					else:
+						continue
+					break
+	
+	for dict_gene_plus_knowntname in list_dict_gene_plus_knowntname_temp:
+		if len(dict_gene_plus_knowntname)==1:
+			t_plus=dict_gene_plus_knowntname.keys()[0]
+			if len(t_plus)==2 and not dict_gene_plus_knowntname.values()[0][0]:
+				for dict_gene_minus_knowntname in list_dict_gene_minus_knowntname_temp:
+					for t_minus in dict_gene_minus_knowntname:
+						if len(t_minus)>2 and t_plus[0][1]>t_minus[0][0] and t_plus[1][0]<t_minus[-1][1]:
+							break
+					else:
+						continue
+					break
+				else:
+					list_dict_gene_plus_knowntname.append(dict_gene_plus_knowntname)
+			else:
+				list_dict_gene_plus_knowntname.append(dict_gene_plus_knowntname)
+		else:
+			list_dict_gene_plus_knowntname.append(dict_gene_plus_knowntname)
+
+	
+
+	
+	
+	
+	list_dict_gene_minus_knowntname.extend(map(lambda x:{(x,):[(),float(dict_exon_count_minus_singleexon[x])/(x[1]-x[0])*1000,dict_exon_cov_minus_singleexon[x],		[dict_exon_cov_minus_singleexon[x]]]},gene_minus_singleexon))
+	list_dict_gene_minus_knowntname=map(lambda x:(x,'list_dict_gene_minus_knowntname'),list_dict_gene_minus_knowntname)
+	
+	list_dict_gene_plus_knowntname.extend(map(lambda x:{(x,):[(),float(dict_exon_count_plus_singleexon[x])/(x[1]-x[0])*1000,dict_exon_cov_plus_singleexon[x],[dict_exon_cov_plus_singleexon[x]]]},gene_plus_singleexon))
+	list_dict_gene_plus_knowntname=map(lambda x:(x,'list_dict_gene_plus_knowntname'),list_dict_gene_plus_knowntname)
+	
+	
+	list_dict_gene_unsigned_knowntname=map(lambda x:{(x,):[(),dict_exon_count_unsigned_singleexon[x]/(x[1]-x[0])*1000,dict_exon_cov_unsigned_singleexon[x],[dict_exon_cov_unsigned_singleexon[x]]]},gene_unsigned_singleexon)
+	list_dict_gene_unsigned_knowntname=map(lambda x:(x,'list_dict_gene_unsigned_knowntname'),list_dict_gene_unsigned_knowntname)
+	
+	
+	list_dict_gene_strand_knowntname=list_dict_gene_plus_knowntname+list_dict_gene_minus_knowntname+list_dict_gene_unsigned_knowntname
+	list_dict_gene_strand_knowntname=sorted(list_dict_gene_strand_knowntname,key=lambda x:sorted(x[0].keys()))
+	
+	
+
+	
+
+	
+	f=open(dir1+'tmp/'+CHR,'w')
+	f_fpkm=open(dir1+'tmp/'+'fpkm/'+CHR+'.txt','w')
+	fpkm=0
+	gene_index=0
+	for gene_strand_knowntname in list_dict_gene_strand_knowntname:
+		dict_gene_strand_knowntname=gene_strand_knowntname[0]
+		if gene_strand_knowntname[1]=='list_dict_gene_minus_knowntname':
+			strand='-'
+		elif gene_strand_knowntname[1]=='list_dict_gene_plus_knowntname':
+			strand='+'
+		else:
+			strand='.'
+		gene_index+=1
+		t_index=0
+		for dict_gene_strand_knowntname_key in sorted(dict_gene_strand_knowntname.keys()):
+			t=dict_gene_strand_knowntname[dict_gene_strand_knowntname_key]
+			t_index+=1
+			if math.isnan(t[1]) or t[1]<0:
+				t[1]=0
+			fpkm+=t[1]
+			if t[0]: 
+				f.write(CHR+'\t'+'AGTAR'+'\t'+'transcript'+'\t'+str(dict_gene_strand_knowntname_key[0][0]+1)+'\t'+str(dict_gene_strand_knowntname_key[-1][-1])+'\t'+'.'+'\t'+strand+'\t'+'.'+'\t'+str(gene_index)+'\t'+str(t_index)+'\t'+t[0][0]+'\t'+t[0][1]+'\t'+str(t[2])+'\t'+str(t[1])+'\n')
+				
+			else:
+				f.write(CHR+'\t'+'AGTAR'+'\t'+'transcript'+'\t'+str(dict_gene_strand_knowntname_key[0][0]+1)+'\t'+str(dict_gene_strand_knowntname_key[-1][-1])+'\t'+'.'+'\t'+strand+'\t'+'.'+'\t'+str(gene_index)+'\t'+str(t_index)+'\t'+str(t[2])+'\t'+str(t[1])+'\n')
+				
+			exon_index=0
+			for exon in dict_gene_strand_knowntname_key:
+				exon_index+=1
+				if t[0]:
+					f.write(CHR+'\t'+'AGTAR'+'\t'+'exon'+'\t'+str(exon[0]+1)+'\t'+str(exon[1])+'\t'+'.'+'\t'+strand+'\t'+'.'+'\t'+str(gene_index)+'\t'+str(t_index)+'\t'+str(exon_index)+'\t'+t[0][0]+'\t'+t[0][1]+'\t'+str(t[3][exon_index-1])+'\n')
+					
+				else:
+					f.write(CHR+'\t'+'AGTAR'+'\t'+'exon'+'\t'+str(exon[0]+1)+'\t'+str(exon[1])+'\t'+'.'+'\t'+strand+'\t'+'.'+'\t'+str(gene_index)+'\t'+str(t_index)+'\t'+str(exon_index)+'\t'+str(t[3][exon_index-1])+'\n')
+	
+	f.close()
+	f_fpkm.write(str(fpkm))
+	f_fpkm.close()
+	
+
+usage = "AGTAR [options] <input.bam/.sam>\nVersion: AGTAR V1.0"
+parser = OptionParser(usage = usage, version="AGTAR V1.0")
+parser.add_option('-o', '--output_dir',default="./",nargs=1,dest="output_dir",action="store",help="Set the storage path of the output file. (default:./)")
+parser.add_option('-G','--GTF',nargs=1,dest="GTF",action="store",help="Use the reference transcript annotation file to guide transcript assembly(GTF format).")
+parser.add_option('-p','--num-threads',nargs=1,type="int",default=1,dest="num_threads",action="store",help="Specify the number of processes to use for transcript assembly. (default:1)")
+parser.add_option('-c','--junction',nargs=1,dest="junction",action="store",help="The junction file output by the processsam module(must be given).")
+parser.add_option('-t','--instance',nargs=1,dest="instance",action="store",help="The instance file output by the processsam module(must be given).")
+parser.add_option('-n','--population-capacity',nargs=1,type="int",default=500,dest="population_capacity",action="store",help="Set population capacity of genetic algorithm.(default:500)")
+parser.add_option('-m','--max-evolutionary-generation',nargs=1,type="int",default=500,dest="max_evolutionary_generation",action="store",help="Set the maximum evolutionary generation number of genetic algorithm.(default:500)")
+parser.add_option('-j','--junc',nargs=1,type="int",default=1,dest="junc",action="store",help="Set the minimum junction coverage. (default:1)")
+parser.add_option('-a','--min-anchor',nargs=1,type="int",default=8,dest='anchor',action="store",help="Set the minimum anchor length on each side of the junction. (default:8)")
+parser.add_option('-I','--max-intron-length',nargs=1,type="int",default=200000,dest="max_intron_length",action="store",help="Set the maximum length of the unannotated introns. (default:200000)")
+parser.add_option('-i','--min-intron-length',nargs=1,type="int",default=5,dest="min_intron_length",action="store",help="Set the minimum length of the unannotated introns. (default:5)")
+
+
+(options, args) = parser.parse_args()
+if os.path.isdir(options.output_dir):
+	pass
+else:
+	os.mkdir(options.output_dir)
+
+
+if len(args)>1:
+	print 'Warning: the number of bam/sam files is more than one. Only the first bam/sam file will be imported.'
+elif len(args)==0:
+	print 'No bam/sam file is offered.'
+	print 'Usage: AGTAR [options] <input .bam/sam>'
+	sys.exit(0)
+
+dir1=options.output_dir+'/'
+
+if os.path.isdir(dir1+'tmp'):
+	shutil.rmtree(dir1+'tmp')
+
+os.mkdir(dir1+'tmp')
+os.mkdir(dir1+'tmp/frag_count')
+os.mkdir(dir1+'tmp/fpkm')
+
+max_intron_length=options.max_intron_length 
+min_intron_length=options.min_intron_length
+min_junc_cov=options.junc
+min_anchor_length=options.anchor
+
+dict_minjunc_fold={1:9,2:9,3:8,4:8,5:7,6:7,7:6,8:6,9:5,10:5}
+for i in range(11,51):
+	dict_minjunc_fold[i]=4
+
+for i in range(51,101):
+	dict_minjunc_fold[i]=3
+
+samfile = pysam.AlignmentFile(args[0],'rb')
+try:
+	samfile.check_index()
+except ValueError:
+	samfile.close()
+	pysam.index(args[0])
+	samfile = pysam.AlignmentFile(args[0],'rb')
+except AttributeError:
+	samfile.close()
+	print 'File '+args[0]+' doesn\'t appear to be a valid BAM file, trying SAM...'
+	if args[0][-4:]=='.sam':
+		try:
+			print 'Trying converting the file to a BAM file '+args[0][-4:]+'.bam'
+			pysam.view('-Sb','-o'+args[0][-4:]+'.bam',args[0])
+			args[0]=args[0][-4:]+'.bam'
+		except:
+			print 'File '+args[0]+' doesn\'t appear to be a valid SAM file.'
+			sys.exit(0)
+	else:
+		try:
+			print 'Trying converting the file to a BAM file '+args[0]+'.bam'
+			pysam.view('-Sb','-o'+args[0]+'.bam',args[0])
+			args[0]=args[0]+'.bam'
+		except:
+			print 'File '+args[0]+' doesn\'t appear to be a valid SAM file.'
+			sys.exit(0)
+	samfile = pysam.AlignmentFile(args[0],'rb')
+	try:
+		samfile.check_index()
+	except ValueError:
+		samfile.close()
+		pysam.index(args[0])
+		samfile = pysam.AlignmentFile(args[0],'rb')
+
+
+gtf_file_name=options.GTF  
+
+if gtf_file_name:
+	f=open(gtf_file_name)
+	gtf_file=[]
+	try:
+		for line in f:
+			temp=line.split('\t')
+			if line[0]!='#' and temp[2]=='exon' and int(temp[4])-int(temp[3])>0 and temp[6] in ['+','-','.'] and re.findall('transcript_id "(.+?)"',temp[8])[0] and re.findall('gene_id "(.+?)"',temp[8])[0]:
+				gtf_file.append(line)
+	except:
+		print 'File '+gtf_file_name+' doesn\'t appear to be a valid gtf file'
+		sys.exit(0)
+	finally:
+		f.close()
+else:
+	gtf_file=[]
+
+if options.junction:
+	juncfile=options.junction
+else:
+	print 'No juncfile file is offered.Please input junction file.'
+	sys.exit(0)
+
+
+if options.instance:
+	insfile=options.instance
+else:
+	print 'No instance file is offered.Please input instance file.'
+	sys.exit(0)
+
+
+print 'Start analysis......'
+read=samfile.fetch().next()
+if read.is_paired:
+	seq_end_type='paired_end'
+	print 'Type:paired-end'
+else:
+	seq_end_type='single_end'
+	print 'Type:single-end'
+
+
+CHRS=samfile.references
+lengths=samfile.lengths
+
+lengths_zip=zip(lengths,range(len(lengths)))
+lengths_zip.sort(key=lambda x:-x[0])
+CHRS_new=[]
+CHRS_new2=[] 
+for i in lengths_zip:
+	if i[0]>10000000:
+		CHRS_new.append(CHRS[i[1]])
+	else:
+		CHRS_new2.append(CHRS[i[1]])
+
+CHRS_new2_set=set(CHRS_new2)
+
+for CHR in CHRS_new:
+	frag_count=0
+	if seq_end_type=='paired_end':
+		for read in samfile.fetch(CHR):
+			if read.cigar:
+				if read.is_paired:
+					frag_count+=1/float(read.get_tag('NH'))*0.5
+				else:
+					frag_count+=1/float(read.get_tag('NH'))
+	else:
+		for read in samfile.fetch(CHR):	
+			if read.cigar:
+				frag_count+=1/float(read.get_tag('NH')) 
+	
+	f=open(dir1+'tmp/'+'frag_count/'+CHR+'.txt','w')
+	f.write(str(frag_count))
+	f.close()
+for CHR in CHRS_new2:
+	frag_count=0
+	if seq_end_type=='paired_end':
+		for read in samfile.fetch(CHR):
+			if read.cigar:
+				if read.is_paired:
+					frag_count+=1/float(read.get_tag('NH'))*0.5
+				else:
+					frag_count+=1/float(read.get_tag('NH'))
+	else:
+		for read in samfile.fetch(CHR):	
+			if read.cigar:
+				frag_count+=1/float(read.get_tag('NH')) 
+	
+	f=open(dir1+'tmp/'+'frag_count/'+CHR+'.txt','w')
+	f.write(str(frag_count))
+	f.close()
+
+frag_count_all=0
+for i in os.listdir(dir1+'tmp/'+'frag_count/'):
+	f=open(dir1+'tmp/'+'frag_count/'+i)
+	frag_count_all+=float(f.read().strip())
+	f.close()
+
+samfile.close()	
+
+
+threadNum = options.num_threads
+
+PopulationC=options.population_capacity
+
+
+maxEG=options.max_evolutionary_generation
+
+
+
+pool = multiprocessing.Pool(threadNum)
+for CHR in CHRS_new:
+	thread_list=[]
+	rdr = pool.apply_async(func=func,args=(frag_count_all,CHR,seq_end_type,gtf_file_name,gtf_file,max_intron_length,min_intron_length,min_junc_cov,min_anchor_length,dict_minjunc_fold,args[0],juncfile,insfile,PopulationC,maxEG)) 
+
+gtf_file_new=[]
+for i in gtf_file:
+	if i.split('\t')[0] in CHRS_new2_set:
+		gtf_file_new.append(i)
+
+del gtf_file
+gc.collect()
+for CHR in CHRS_new2:
+	thread_list=[]
+	rdr = pool.apply_async(func=func,args=(frag_count_all,CHR,seq_end_type,gtf_file_name,gtf_file_new,max_intron_length,min_intron_length,min_junc_cov,min_anchor_length,dict_minjunc_fold,args[0],juncfile,insfile,PopulationC,maxEG)) 
+
+pool.close()
+pool.join()
+
+
+
+frag_count_all=0
+for i in os.listdir(dir1+'tmp/'+'frag_count/'):
+	f=open(dir1+'tmp/'+'frag_count/'+i)
+	frag_count_all+=float(f.read().strip())
+	f.close()
+
+fpkm_all=0
+for i in os.listdir(dir1+'tmp/'+'fpkm/'):
+	f=open(dir1+'tmp/'+'fpkm/'+i)
+	fpkm_all+=float(f.read().strip())
+	f.close()
+
+
+chr_name=os.listdir(dir1+'tmp/') 
+
+f_gtf=open(dir1+'AGTAR.gtf','w')
+f_gtf.write('#AGTAR version 1.0'+'\n')
+gene_index_pre=0
+for i in sorted(os.listdir(dir1+'tmp/')):
+	if os.path.isfile(dir1+'tmp/'+i):
+		f=open(dir1+'tmp/'+i)
+		flag=0
+		for i in f:
+			flag=1
+			temp=i.strip().split('\t')
+			if temp[2]=='transcript':
+				temp.append(str(float(temp[-1])/float(fpkm_all)*1000000))
+				temp[-2]=str(float(temp[-2])/frag_count_all*1000000)
+				temp[8]=str(int(temp[8])+gene_index_pre)
+				if len(temp)==15:
+					f_gtf.write('\t'.join(temp[0:8])+'\t'+'gene_id "'+'AGTAR.'+temp[8]+'"; transcript_id "'+'AGTAR.'+temp[8]+'.'+temp[9]+'"; ref_transcript_id "'+temp[11]+'";ref_gene_id "'+temp[10]+'";  cov "'+temp[12]+'"; FPKM "'+temp[13]+'"; TPM "'+temp[14]+'";'+'\n')
+				else:
+					f_gtf.write('\t'.join(temp[0:8])+'\t'+'gene_id "'+'AGTAR.'+temp[8]+'"; transcript_id "'+'AGTAR.'+temp[8]+'.'+temp[9]+'"; cov "'+temp[10]+'"; FPKM "'+temp[11]+'"; TPM "'+temp[12]+'";'+'\n')
+			else:
+				temp[8]=str(int(temp[8])+gene_index_pre)
+				if len(temp)==14:
+					f_gtf.write('\t'.join(temp[0:8])+'\t'+'gene_id "'+'AGTAR.'+temp[8]+'"; transcript_id "'+'AGTAR.'+temp[8]+'.'+temp[9]+'"; exon_number "'+temp[10]+'";ref_transcript_id "'+temp[12]+'"; ref_gene_id "'+temp[11]+'"; cov "'+temp[13]+'";'+'\n')
+				else:
+					f_gtf.write('\t'.join(temp[0:8])+'\t'+'gene_id "'+'AGTAR.'+temp[8]+'"; transcript_id "'+'AGTAR.'+temp[8]+'.'+temp[9]+'"; exon_number "'+temp[10]+'"; cov "'+temp[11]+'";'+'\n')
+		f.close()
+		if flag==1:
+			gene_index_pre=int(temp[8])
+
+f_gtf.close()
+
+
+
+shutil.rmtree(dir1+'tmp/')
+print('End')
+
+time_elapsed = time.time() - since  
+print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+
